@@ -20,9 +20,7 @@ async function main() {
 	};
 
 	const config = new AptosConfig({
-		network: Network.DEVNET,
-		// fullnode: nodeApiUrl,
-		fullnode: "https://api.devnet.aptoslabs.com/v1",
+		network: Network.TESTNET,
 		clientConfig,
 	});
 

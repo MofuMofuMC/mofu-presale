@@ -2,7 +2,7 @@
 # Mofu Mofu Genesis NFT Bridge – Aptos Move Contract
 
 **Network:** Testnet  
-**Module Address:** `0xb46203f5d5ee9fbda8bacc891a08e401d73fbc93096d0de13636a503b670b9db`
+**Module Address:** `0x9685bb3f64680f2a7f02870fd867fb98abc6bea231802f7f12e0cf330155b996`
 
 ---
 

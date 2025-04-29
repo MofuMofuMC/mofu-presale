@@ -7,9 +7,7 @@ async function main() {
 	};
 
 	const config = new AptosConfig({
-		network: Network.DEVNET,
-		// fullnode: nodeApiUrl,
-		fullnode: "https://api.devnet.aptoslabs.com/v1",
+		network: Network.TESTNET,
 		clientConfig,
 	});
 
@@ -26,7 +24,7 @@ async function main() {
 		sender: account.accountAddress,
 		data: {
 			function:
-				"0xfd56505f04e78e0fd5f2cf10ddabf2a75548f6694f03fd1b6c5daedba17d48ca::bridge::add_validator",
+				"0x9685bb3f64680f2a7f02870fd867fb98abc6bea231802f7f12e0cf330155b996::bridge::add_validator",
 			typeArguments: [],
 			functionArguments: [
 				Uint8Array.from(

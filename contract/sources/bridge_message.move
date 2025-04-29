@@ -1,6 +1,6 @@
 module bridge::bridge_message {
     use std::vector;
-    use std::option;
+    // use std::option;
     use std::bcs;
     use aptos_std::ed25519::{Self};
 

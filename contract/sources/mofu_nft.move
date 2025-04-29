@@ -127,8 +127,8 @@ module bridge::mofu_nft {
 
     // ======= Views ========
 
-    /// Get the address of the collection owner.
     #[view]
+    /// Get the address of the collection owner.
     public fun collection_owner(): address {
         object::create_object_address(
             &@bridge,
