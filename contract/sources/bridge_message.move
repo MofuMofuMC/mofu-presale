@@ -4,6 +4,8 @@ module bridge::bridge_message {
     use std::bcs;
     use aptos_std::ed25519::{Self};
 
+    friend bridge::bridge;
+
     // ======== Constants ========
 
     const EINVALID_SIGNATURE: u64 = 2;
@@ -30,11 +32,11 @@ module bridge::bridge_message {
 
     // ======== Public Package Functions ========
 
-    public(package) fun create_message_key(token_id: u256): BridgeMessageKey {
+    public(friend) fun create_message_key(token_id: u256): BridgeMessageKey {
         BridgeMessageKey { token_id }
     }
 
-    public(package) fun create_message_hash_internal(
+    public(friend) fun create_message_hash_internal(
         source_addr: vector<u8>,
         target_addr: address,
         token_id: u256,
@@ -45,10 +47,11 @@ module bridge::bridge_message {
         vector::append(&mut message, bcs::to_bytes(&source_addr));
         vector::append(&mut message, bcs::to_bytes(&target_addr));
         vector::append(&mut message, bcs::to_bytes(&token_id));
+        vector::append(&mut message, bcs::to_bytes(&seq_num));
         message
     }
 
-    public(package) fun create_message(
+    public(friend) fun create_message(
         seq_num: u64,
         token_id: u256,
         source_addr: vector<u8>,
@@ -58,7 +61,7 @@ module bridge::bridge_message {
         message
     }
 
-    public(package) fun verify_signature_internal(
+    public(friend) fun verify_signature_internal(
         public_key: ed25519::ValidatedPublicKey,
         message: vector<u8>,
         signature_bytes: vector<u8>
@@ -95,11 +98,6 @@ module bridge::bridge_message {
 
         assert!(is_valid, 0);
     }
-
-    // #[test]
-    // fun test_create_message_key() {
-    //     create_message_key(1)
-    // }
 
     #[test]
     fun test_invalid_signature_fails() {

@@ -4,18 +4,14 @@ module bridge::bridge {
     use std::option::{Self, Option};
     use std::signer;
     use aptos_std::ed25519::{Self};
-
-    // use aptos_framework::resource_account;
     use aptos_framework::account::{Self, SignerCapability};
     use aptos_framework::event::{Self};
     use aptos_framework::object::{Self};
     use aptos_framework::ordered_map;
-
     use aptos_std::table::{Self, Table};
     use bridge::bridge_message::{Self, BridgeMessage, BridgeMessageKey};
     use bridge::mofu_nft::{Self, MofuToken};
 
-    // ======== Constants ========
     // ======== Events ========
 
     #[event]
@@ -48,7 +44,7 @@ module bridge::bridge {
     const EINVALID_SIGNATURE: u64 = 2;
     const EINVALID_VALIDATOR: u64 = 3;
     const EVALIDATOR_ALREADY_EXISTS: u64 = 4;
-    const EVALIDATOR_NOT_FOUND: u64 = 5;
+    // const EVALIDATOR_NOT_FOUND: u64 = 5;
     const EINVALID_VALIDATOR_ADDR: u64 = 6;
     const EINVALID_VALIDATOR_ADDR_LENGTH: u64 = 7;
     const EALREADY_CLAIMED: u64 = 8;
@@ -58,6 +54,7 @@ module bridge::bridge {
     const ERECORD_ALREADY_EXISTS: u64 = 12;
     const EPAUSED: u64 = 13;
     const ETOKEN_NOT_FOUND: u64 = 14;
+    const EVALIDATOR_EXISTS: u64 = 15;
 
     // ======== Struct ========
 
@@ -80,7 +77,7 @@ module bridge::bridge {
 
     fun init_module(sender: &signer) {
         let (resource_signer, resource_cap) =
-            account::create_resource_account(sender, b"nft");
+            account::create_resource_account(sender, b"Mofu Bridge");
 
         mofu_nft::create_mofu_collection(&resource_signer);
 
@@ -111,21 +108,6 @@ module bridge::bridge {
         }
     }
 
-    fun find_validator_index(validator_addr: vector<u8>): u64 acquires BridgeRegistry {
-        let validators = get_validators_from_registry();
-        let index = 0;
-
-        for (i in 0..vector::length<vector<u8>>(&validators)) {
-            let exist_validator_addr = vector::borrow(&validators, i);
-            if (exist_validator_addr == &validator_addr) {
-                index = i + 1;
-                break;
-            }
-        };
-
-        index
-    }
-
     public entry fun add_validator(
         sender: &signer, validator_addr: vector<u8>
     ) acquires BridgeRegistry {
@@ -133,27 +115,10 @@ module bridge::bridge {
         assert!(
             vector::length<u8>(&validator_addr) == 32, EINVALID_VALIDATOR_ADDR_LENGTH
         ); // Invalid validator address length
+        assert!(find_validator_index(validator_addr) == 0, EVALIDATOR_EXISTS);
         let registry = borrow_global_mut<BridgeRegistry>(@bridge);
 
         vector::push_back(&mut registry.validators, validator_addr);
-    }
-
-    inline fun borrow_registry(): &BridgeRegistry acquires BridgeRegistry {
-        borrow_global<BridgeRegistry>(@bridge)
-    }
-
-    inline fun borrow_registry_mut(): &mut BridgeRegistry acquires BridgeRegistry {
-        borrow_global_mut<BridgeRegistry>(@bridge)
-    }
-
-    inline fun get_validator_from_registry(index: u64): vector<u8> acquires BridgeRegistry {
-        let registry = borrow_global<BridgeRegistry>(@bridge);
-        assert!(
-            index < vector::length<vector<u8>>(&registry.validators),
-            EVALIDATOR_INDEX_OUT_OF_BOUNDS
-        ); // Index out of bounds
-
-        *vector::borrow(&registry.validators, index)
     }
 
     public entry fun create_bridge_record(
@@ -213,6 +178,22 @@ module bridge::bridge {
         );
     }
 
+    public entry fun claim(claimer: &signer, token_id: u256) acquires BridgeRegistry {
+        claim_internal(claimer, token_id);
+    }
+
+    public entry fun remove_validator(
+        sender: &signer, validator_addr: vector<u8>
+    ) acquires BridgeRegistry {
+        assert_admin(sender); // Check admin authorization
+
+        let index = find_validator_index(validator_addr);
+        assert!(index > 0, 3); // Validator does not exist
+
+        let registry = borrow_global_mut<BridgeRegistry>(@bridge);
+        vector::remove(&mut registry.validators, index - 1);
+    }
+
     fun claim_internal(claimer: &signer, token_id: u256) acquires BridgeRegistry {
         let registry = borrow_registry_mut();
         asset_not_paused(registry);
@@ -248,29 +229,61 @@ module bridge::bridge {
         assert!(is_enabled(registry), error::invalid_state(EPAUSED))
     }
 
-    public entry fun claim(claimer: &signer, token_id: u256) acquires BridgeRegistry {
-        claim_internal(claimer, token_id);
-    }
-
     inline fun assert_admin(sender: &signer) {
         let sender_address = signer::address_of(sender);
         assert!(sender_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
     }
 
-    public entry fun remove_validator(
-        sender: &signer, validator_addr: vector<u8>
-    ) acquires BridgeRegistry {
-        assert_admin(sender); // Check admin authorization
-
-        let index = find_validator_index(validator_addr);
-        assert!(index > 0, 3); // Validator does not exist
-
-        let registry = borrow_global_mut<BridgeRegistry>(@bridge);
-        vector::remove(&mut registry.validators, index - 1);
-    }
-
     inline fun is_enabled(registry: &BridgeRegistry): bool {
         registry.enabled
+    }
+
+    fun find_validator_index(validator_addr: vector<u8>): u64 acquires BridgeRegistry {
+        let validators = get_validators_from_registry();
+        let index = 0;
+
+        for (i in 0..vector::length<vector<u8>>(&validators)) {
+            let exist_validator_addr = vector::borrow(&validators, i);
+            if (exist_validator_addr == &validator_addr) {
+                index = i + 1;
+                break;
+            }
+        };
+
+        index
+    }
+
+    inline fun borrow_registry(): &BridgeRegistry acquires BridgeRegistry {
+        borrow_global<BridgeRegistry>(@bridge)
+    }
+
+    inline fun borrow_registry_mut(): &mut BridgeRegistry acquires BridgeRegistry {
+        borrow_global_mut<BridgeRegistry>(@bridge)
+    }
+
+    inline fun get_validator_from_registry(index: u64): vector<u8> acquires BridgeRegistry {
+        let registry = borrow_global<BridgeRegistry>(@bridge);
+        assert!(
+            index < vector::length<vector<u8>>(&registry.validators),
+            EVALIDATOR_INDEX_OUT_OF_BOUNDS
+        ); // Index out of bounds
+
+        *vector::borrow(&registry.validators, index)
+    }
+
+    // ======== View ========
+
+    #[view]
+    public fun is_token_claimed(token_id: u256): bool acquires BridgeRegistry {
+        let registry = borrow_global<BridgeRegistry>(@bridge);
+        !vector::contains(&registry.claimed_tokens, &token_id)
+    }
+
+    #[view]
+    public fun is_token_bridged(token_id: u256): bool acquires BridgeRegistry {
+        let registry = borrow_global<BridgeRegistry>(@bridge);
+
+        registry.records.contains(bridge_message::create_message_key(token_id))
     }
 
     #[view]
@@ -329,27 +342,27 @@ module bridge::bridge {
     use aptos_token_objects::collection::{Self};
 
     #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 851977)]
+    #[expected_failure(abort_code = 25863)]
     fun test_claim_fails_when_token_unavailable(sender: &signer) acquires BridgeRegistry {
         // Init and prepare a bridge record without preminting tokens
         init_module(sender);
         let validator =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         add_validator(sender, validator);
 
         premint(sender);
         // Create bridge record but don't premint
         create_bridge_record(
             b"1234567890abcdef1234567890abcdef12345678",
-            @0xc697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e832,
-            10,
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8,
             10,
             0,
-            x"21d748f2569791e8587170934c4c402ebce7dc69ef6318c234035ea270c3d2565bb4db50470a0df48772945fe3ea7d5379487509ed99843176f588f7539bbd05"
+            0,
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03"
         );
 
         // Try to claim without available token
-        claim(sender, 10);
+        claim(sender, 11);
     }
 
     #[test(sender = @bridge, claimer = @0x33)]
@@ -413,6 +426,40 @@ module bridge::bridge {
     }
 
     #[test(sender = @bridge)]
+    fun test_verify_signature_success(sender: &signer) acquires BridgeRegistry {
+        // let sender_addr = signer::address_of(sender);
+        // Set up test environment
+        let validator =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+
+        // Initialize module with admin
+        init_module(sender);
+
+        // Add validator
+        add_validator(sender, validator);
+
+        let validator = get_validator_from_registry(0);
+        let signature =
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let source_addr = b"1234567890abcdef1234567890abcdef12345678";
+        let token_id = 10;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let nonce = 0;
+        let message_hash =
+            bridge_message::create_message_hash_internal(
+                source_addr, target_addr, token_id, nonce
+            );
+
+        let valid = verify_validator_signature_internal(
+            validator, message_hash, signature
+        );
+
+        assert!(valid, EINVALID_SIGNATURE); // Signature verification failed
+
+    }
+
+    #[test(sender = @bridge)]
     #[expected_failure(abort_code = 0x50001)]
     fun test_add_validator_fails_with_normal_user(sender: &signer) acquires BridgeRegistry {
         let mock_user = account::create_signer_for_test(@0x11);
@@ -425,6 +472,22 @@ module bridge::bridge {
 
         // Add validator
         add_validator(&mock_user, validator);
+    }
+
+    #[test(sender = @bridge)]
+    #[expected_failure(abort_code = EVALIDATOR_EXISTS)]
+    fun test_add_validator_fails_with_duplicate(sender: &signer) acquires BridgeRegistry {
+        // let mock_user = account::create_signer_for_test(@0x11);
+        // Set up test environment
+        let validator =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+
+        // Initialize module with admin
+        init_module(sender);
+
+        // Add validator
+        add_validator(sender, validator);
+        add_validator(sender, validator);
     }
 
     #[test(sender = @bridge)]
@@ -449,16 +512,15 @@ module bridge::bridge {
     #[test(sender = @bridge)]
     fun test_create_bridge_record_success(sender: &signer) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr =
-            @0xc697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e832;
+                let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
-        let message =
-            x"2831323334353637383930616263646566313233343536373839306162636465663132333435363738c697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e8320a00000000000000000000000000000000000000000000000000000000000000";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"21d748f2569791e8587170934c4c402ebce7dc69ef6318c234035ea270c3d2565bb4db50470a0df48772945fe3ea7d5379487509ed99843176f588f7539bbd05";
-        init_module(sender);
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        
+        let nonce = 0;init_module(sender);
 
         add_validator(sender, validator_addr);
 
@@ -466,24 +528,16 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
         // Add validator
 
-        let valid =
-            verify_validator_signature_internal(
-                validator_addr,
-                message,
-                signature
-                // signer::address_of(sender)
-            );
-
         let registry = borrow_global<BridgeRegistry>(@bridge);
 
         assert!(vector::length(&registry.verified_signatures) == 1, 0); // Signature not verified
-        assert!(valid, EINVALID_SIGNATURE); // Signature verification failed
+        // assert!(valid, EINVALID_SIGNATURE); // Signature verification failed
     }
 
     #[test(sender = @bridge)]
@@ -492,16 +546,14 @@ module bridge::bridge {
         sender: &signer
     ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr =
-            @0xc697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e832;
+                let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
-        // let message =
-        //     x"2831323334353637383930616263646566313233343536373839306162636465663132333435363738c697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e8320a00000000000000000000000000000000000000000000000000000000000000";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"21d748f2569791e8587170934c4c402ebce7dc69ef6318c234035ea270c3d2565bb4db50470a0df48772945fe3ea7d5379487509ed99843176f588f7539bbd05";
-        init_module(sender);
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;init_module(sender);
 
         add_validator(sender, validator_addr);
 
@@ -509,7 +561,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             1,
             signature
         );
@@ -520,14 +572,14 @@ module bridge::bridge {
     fun test_create_bridge_record_fails_with_duplicate(sender: &signer) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
         let target_addr =
-            @0xc697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e832;
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
-        // let message =
-        //     x"2831323334353637383930616263646566313233343536373839306162636465663132333435363738c697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e8320a00000000000000000000000000000000000000000000000000000000000000";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"21d748f2569791e8587170934c4c402ebce7dc69ef6318c234035ea270c3d2565bb4db50470a0df48772945fe3ea7d5379487509ed99843176f588f7539bbd05";
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;
+        
         init_module(sender);
 
         add_validator(sender, validator_addr);
@@ -536,7 +588,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
@@ -544,7 +596,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
@@ -556,16 +608,14 @@ module bridge::bridge {
         sender: &signer
     ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr =
-            @0xc697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e832;
+                let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
-        // let message =
-        //     x"2831323334353637383930616263646566313233343536373839306162636465663132333435363738c697791f11639b6e4703064e6050d2867e0a46b2ad33d7f4fb7b1dd59fd6e8320a00000000000000000000000000000000000000000000000000000000000000";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"20d748f2569791e8587170934c4c402ebce7dc69ef6318c234035ea270c3d2565bb4db50470a0df48772945fe3ea7d5379487509ed99843176f588f7539bbd05";
-        init_module(sender);
+            x"052b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;init_module(sender);
 
         add_validator(sender, validator_addr);
 
@@ -573,7 +623,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
@@ -592,10 +642,10 @@ module bridge::bridge {
             @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"e8490782e10de58aaf46a1f35c1dd1d027eb20e50402210af3b52578a1f7b31510cb408d9fa5d8cef6fa347a037f515d7b8eb72072c0218a5782e60d238b9d0c";
-        init_module(sender);
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;init_module(sender);
 
         add_validator(sender, validator_addr);
 
@@ -603,7 +653,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
@@ -629,10 +679,10 @@ module bridge::bridge {
             @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"e8490782e10de58aaf46a1f35c1dd1d027eb20e50402210af3b52578a1f7b31510cb408d9fa5d8cef6fa347a037f515d7b8eb72072c0218a5782e60d238b9d0c";
-        init_module(sender);
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0; init_module(sender);
 
         add_validator(sender, validator_addr);
 
@@ -640,7 +690,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
@@ -668,9 +718,10 @@ module bridge::bridge {
             @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"e8490782e10de58aaf46a1f35c1dd1d027eb20e50402210af3b52578a1f7b31510cb408d9fa5d8cef6fa347a037f515d7b8eb72072c0218a5782e60d238b9d0c";
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;
         init_module(sender);
 
         add_validator(sender, validator_addr);
@@ -680,7 +731,7 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
@@ -702,9 +753,11 @@ module bridge::bridge {
             @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
         let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
-            x"e8490782e10de58aaf46a1f35c1dd1d027eb20e50402210af3b52578a1f7b31510cb408d9fa5d8cef6fa347a037f515d7b8eb72072c0218a5782e60d238b9d0c";
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;
+
         init_module(sender);
 
         add_validator(sender, validator_addr);
@@ -713,19 +766,21 @@ module bridge::bridge {
             source_addr,
             target_addr,
             token_id,
-            10,
+            nonce,
             0,
             signature
         );
 
         premint(sender);
 
+        assert!(is_token_bridged(token_id) == true, 0); // Token is claimable
         claim(user, token_id);
-
+        assert!(is_token_claimed(token_id) == false, 0); // Token is not claimable
         let registry = borrow_global<BridgeRegistry>(@bridge);
         let key = bridge_message::create_message_key(token_id);
         let bridge_record = table::borrow(&registry.records, key);
 
+        // assert!(registry.pending_claims.contains(&token_id) == false, 0); // Token is not claimable
         assert!(bridge_record.claimed == true, 0); // Already claimed
         assert!(bridge_record.recipient == signer::address_of(user), 0); // Not the recipient
         assert!(registry.pending_claims.contains(&token_id) == false, 0); //

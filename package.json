@@ -1,5 +1,5 @@
 {
-  "name": "contract-template",
+  "name": "mofu-aptos-bridge",
   "private": true,
   "version": "0.0.0",
   "license": "Apache-2.0",
@@ -7,14 +7,17 @@
     "move:test": "node ./scripts/move/test",
     "move:compile": "node ./scripts/move/compile",
     "move:publish": "node ./scripts/move/publish",
-    "move:upgrade": "node ./scripts/move/upgrade"
+    "move:upgrade": "node ./scripts/move/upgrade",
+    "format": "biome format"
   },
   "dependencies": {
-    "@aptos-labs/ts-sdk": "^1.26.0"
+    "@aptos-labs/ts-sdk": "^1.38.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.1",
+    "@biomejs/biome": "1.9.4",
+    "@types/node": "^20.17.31",
     "dotenv": "16.3.1",
-    "tree-kill": "^1.2.2"
+    "tree-kill": "^1.2.2",
+    "typescript": "^5.8.3"
   }
 }

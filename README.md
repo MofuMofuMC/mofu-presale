@@ -1,9 +1,27 @@
 
+# Mofu Mofu Genesis NFT Bridge – Aptos Move Contract
 
+**Network:** Testnet  
+**Module Address:** `0xb46203f5d5ee9fbda8bacc891a08e401d73fbc93096d0de13636a503b670b9db`
 
+---
 
-aptos move deploy-object --address-name mint-nft --profile roy
+## Overview
 
-aptos move run --function-id 0x72e5ef01545c65f029c5ae91f595f83b31e64ff86ec3377cb446ec4152acbec1::signature_verifier::mint --profile roy
+This Move contract implements a cross-chain NFT bridge for the Mofu Mofu Genesis collection, enabling secure NFT transfers from Ethereum to Aptos. It features validator-based signature verification, pre-minting, claim logic, and robust admin controls.
 
-aptos account fund-with-faucet --account 0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8 --profile roy
+---
+
+## Modules
+
+- `bridge::bridge` – Main bridge logic, validator management, claim, and record creation.
+- `bridge::bridge_message` – Message hash and signature verification utilities.
+- `bridge::mofu_nft` – NFT minting, collection management, and royalty logic.
+
+---
+
+## Deployment
+
+```sh
+aptos move publish --profile <your-profile> --assume-yes
+```
