@@ -2,13 +2,8 @@ import { Aptos, AptosConfig, type ClientConfig, Network } from "@aptos-labs/ts-s
 import { getAccount } from "./config";
 
 async function main() {
-	const clientConfig: ClientConfig = {
-		API_KEY: "AG-FVEWZQTCTWH16J4DJMZOZCDP9NNN3MVM",
-	};
-
 	const config = new AptosConfig({
 		network: Network.TESTNET,
-		clientConfig,
 	});
 
 	const aptos = new Aptos(config);

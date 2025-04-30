@@ -14,7 +14,6 @@ async function compile() {
   await move.compile({
     packageDirectoryPath: "contract",
     namedAddresses: {
-      // Compile module with account address
       admin_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
       bridge: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
     },

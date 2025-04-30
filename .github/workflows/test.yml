@@ -15,4 +15,4 @@ jobs:
         shell: bash
       - uses: actions/checkout@v4
       - name: Runs move tests.
-        run: cd contract && aptos move test
+        run: cd contract && aptos move test --dev

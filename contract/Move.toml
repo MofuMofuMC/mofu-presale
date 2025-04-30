@@ -5,7 +5,10 @@ authors = []
 
 [addresses]
 bridge = "_"
-admin_addr = "0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8"
+admin_addr = "_"
+
+[dev-addresses]
+bridge = "0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8"
 
 [dependencies]
 AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-framework", rev = "mainnet" }

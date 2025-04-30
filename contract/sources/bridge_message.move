@@ -61,10 +61,17 @@ module bridge::bridge_message {
         message
     }
 
+    public(friend) fun extract_message(message: &BridgeMessage): (u64, u256, vector<u8>, address) {
+        let seq_num = message.seq_num;
+        let token_id = message.token_id;
+        let source_addr = message.source_addr;
+        let target_addr = message.target_addr;
+
+        (seq_num, token_id, source_addr, target_addr)
+    }
+
     public(friend) fun verify_signature_internal(
-        public_key: ed25519::ValidatedPublicKey,
-        message: vector<u8>,
-        signature_bytes: vector<u8>
+        public_key: ed25519::ValidatedPublicKey, message: vector<u8>, signature_bytes: vector<u8>
     ): bool {
         let sig = ed25519::new_signature_from_bytes(signature_bytes);
         let unvalidated_public_key = ed25519::public_key_to_unvalidated(&public_key);
@@ -75,10 +82,12 @@ module bridge::bridge_message {
     // ======== Private Functions ========
     // ======== Tests ========
 
+    #[test_only]
+    use std::option;
+
     #[test]
     fun test_valid_signature_success() {
-        let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+        let validator_addr = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
         let message =
             b"283132333435363738393061626364656631323334353637383930616263646566313233343536373840633639373739316631313633396236653437303330363465363035306432383637653061343662326164333364376634666237623164643539666436653833320a00000000000000000000000000000000000000000000000000000000000000";
         let signature =
@@ -88,21 +97,19 @@ module bridge::bridge_message {
         assert!(option::is_some(&option_pk), EINVALID_VALIDATOR_PK); // Invalid public key
         let pk = option::extract(&mut option_pk);
 
-        let is_valid =
-            verify_signature_internal(
-                pk,
-                message,
-                signature
-                // signer::address_of(sender)
-            );
+        let is_valid = verify_signature_internal(
+            pk,
+            message,
+            signature
+            // signer::address_of(sender)
+        );
 
         assert!(is_valid, 0);
     }
 
     #[test]
     fun test_invalid_signature_fails() {
-        let validator_addr =
-            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+        let validator_addr = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
         let message =
             b"283132333435363738393061626364656631323334353637383930616263646566313233343536373840633639373739316631313633396236653437303330363465363035306432383637653061343662326164333364376634666237623164643539666436653833320a00000000000000000000000000000000000000000000000000000000000000";
         let signature =
@@ -112,13 +119,12 @@ module bridge::bridge_message {
         assert!(option::is_some(&option_pk), EINVALID_VALIDATOR_PK); // Invalid public key
         let pk = option::extract(&mut option_pk);
 
-        let is_valid =
-            verify_signature_internal(
-                pk,
-                message,
-                signature
-                // signer::address_of(sender)
-            );
+        let is_valid = verify_signature_internal(
+            pk,
+            message,
+            signature
+            // signer::address_of(sender)
+        );
 
         assert!(is_valid == false, 0);
     }

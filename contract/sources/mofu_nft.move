@@ -2,12 +2,13 @@ module bridge::mofu_nft {
     use std::error;
     use std::string::{Self, String};
     use std::option::{Self};
-    use aptos_framework::object::{Self, Object};
+    use aptos_framework::object::{Self};
     use aptos_token_objects::collection::{Self};
     use aptos_token_objects::token::{Self};
     use aptos_token_objects::royalty::{Self};
     use std::signer;
     use aptos_std::string_utils;
+    use aptos_framework::account::{Self, SignerCapability};
 
     friend bridge::bridge;
 
@@ -36,7 +37,19 @@ module bridge::mofu_nft {
         burn_ref: token::BurnRef
     }
 
+    struct MofuCollection has key {
+        admin_cap: SignerCapability
+    }
+
     // ======== Public Package Functions ========
+
+    public(friend) fun init(
+        owner: &signer, creator: &signer, creator_cap: SignerCapability
+    ) {
+        create_mofu_collection(creator);
+
+        move_to(owner, MofuCollection { admin_cap: creator_cap });
+    }
 
     /// Mint a new Mofu NFT token with a unique token_id.
     /// Only callable by the collection creator.
@@ -61,8 +74,7 @@ module bridge::mofu_nft {
 
         move_to(&object_signer, mofu_token);
 
-        let token_object =
-            object::object_from_constructor_ref<MofuToken>(&constructor_ref);
+        let token_object = object::object_from_constructor_ref<MofuToken>(&constructor_ref);
 
         assert!(
             (token::index(token_object) - 1) == (token_id as u64),
@@ -71,6 +83,12 @@ module bridge::mofu_nft {
         let token_address = object::object_address(&token_object);
 
         token_address
+    }
+
+    public(friend) fun create_collection_signer(): signer acquires MofuCollection {
+        let mofu_collection = borrow_global<MofuCollection>(@bridge);
+        let collection_signer = account::create_signer_with_capability(&mofu_collection.admin_cap);
+        collection_signer
     }
 
     public(friend) inline fun create_mofu_collection(creator: &signer) {
@@ -108,10 +126,9 @@ module bridge::mofu_nft {
         uri
     }
 
+    #[test_only]
     /// Borrow the MofuToken resource for a given token, ensuring the caller is the creator.
-    inline fun authorized_borrow<T: key>(
-        token: &Object<T>, creator: &signer
-    ): &MofuToken {
+    inline fun authorized_borrow<T: key>(token: &Object<T>, creator: &signer): &MofuToken {
         let token_address = object::object_address(token);
         assert!(
             exists<MofuToken>(token_address),
@@ -137,6 +154,9 @@ module bridge::mofu_nft {
     }
 
     // ======= Tests ========
+
+    #[test_only]
+    use aptos_framework::object::{Object};
 
     #[test_only]
     fun create_mofu_collection_for_testing(creator: &signer) {
@@ -173,11 +193,8 @@ module bridge::mofu_nft {
 
         let collection_name = string::utf8(COLLECTION_NAME);
         let collection_address =
-            collection::create_collection_address(
-                &signer::address_of(creator), &collection_name
-            );
-        let collection =
-            object::address_to_object<collection::Collection>(collection_address);
+            collection::create_collection_address(&signer::address_of(creator), &collection_name);
+        let collection = object::address_to_object<collection::Collection>(collection_address);
         assert!(object::owner(collection) == signer::address_of(creator), 0);
         assert!(collection::count(collection) == option::some(0), 0);
     }
@@ -214,12 +231,9 @@ module bridge::mofu_nft {
 
         // let collection_name = string::utf8(COLLECTION_NAME);
         let collection_address =
-            collection::create_collection_address(
-                &signer::address_of(creator), &collection_name
-            );
+            collection::create_collection_address(&signer::address_of(creator), &collection_name);
 
-        let collection =
-            object::address_to_object<collection::Collection>(collection_address);
+        let collection = object::address_to_object<collection::Collection>(collection_address);
 
         // //
         assert!(collection::count(collection) == option::some(2), 0);
@@ -230,17 +244,14 @@ module bridge::mofu_nft {
 
     #[test(creator = @bridge)]
     fun test_token_ids(creator: &signer) {
-        use std::debug;
         create_mofu_collection(creator);
         let token_id = 0;
         let token_address = mint_token(creator, token_id);
-        let token_object =
-            object::address_to_object<token::TokenIdentifiers>(token_address);
+        let token_object = object::address_to_object<token::TokenIdentifiers>(token_address);
 
-        // debug::print(&token::index(token_object));
         let token_name = token::name(token_object);
-        debug::print(&token_name);
-        // assert!(token::index(token_object) == (token_id as u64), 0);
+
+        assert!(token_name == string::utf8(b"Mofu Genesis #0"), 0);
     }
 
     #[test(creator = @bridge)]

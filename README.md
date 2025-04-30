@@ -2,7 +2,7 @@
 # Mofu Mofu Genesis NFT Bridge – Aptos Move Contract
 
 **Network:** Testnet  
-**Module Address:** `0x9685bb3f64680f2a7f02870fd867fb98abc6bea231802f7f12e0cf330155b996`
+**Module Address:** `0x3dd2940093837771f6396c3a20d5f4b7034830dee5540a6d0841a3a5eab4e81c`
 
 ---
 
@@ -24,4 +24,10 @@ This Move contract implements a cross-chain NFT bridge for the Mofu Mofu Genesis
 
 ```sh
 aptos move publish --profile <your-profile> --assume-yes
+```
+
+### Format Contracts
+
+```sh
+aptos move fmt --config max_width=100,indent_size=4
 ```
