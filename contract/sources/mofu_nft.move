@@ -192,7 +192,7 @@ module bridge::mofu_nft {
     }
 
     #[test(creator = @bridge)]
-    fun test_create_nft_collection(creator: &signer) {
+    fun test_create_nft_collection_ok(creator: &signer) {
         create_mofu_collection(creator);
 
         let collection_name = string::utf8(COLLECTION_NAME);
@@ -207,7 +207,7 @@ module bridge::mofu_nft {
     }
 
     #[test(creator = @bridge)]
-    fun test_create_nft_token(creator: &signer) {
+    fun test_create_nft_token_ok(creator: &signer) {
         let collection_name = string::utf8(COLLECTION_NAME);
         // let token_name = string::utf8(b"Mofu #1");
         create_mofu_collection(creator);
@@ -263,7 +263,7 @@ module bridge::mofu_nft {
     }
 
     #[test(creator = @bridge)]
-    fun test_create_and_transfer(creator: &signer) {
+    fun test_create_and_transfer_ok(creator: &signer) {
         create_mofu_collection(creator);
         let token_address = mint_token(creator, 0);
 
@@ -275,7 +275,7 @@ module bridge::mofu_nft {
     }
 
     #[test(creator = @bridge)]
-    fun test_burn_success(creator: &signer) acquires MofuToken {
+    fun test_burn_ok(creator: &signer) acquires MofuToken {
         create_mofu_collection(creator);
         let token_address = mint_token(creator, 0);
         let token = object::address_to_object<MofuToken>(token_address);
@@ -296,14 +296,16 @@ module bridge::mofu_nft {
 
     #[test(creator = @bridge, user = @0x345)]
     #[expected_failure(abort_code = 393218, location = aptos_framework::object)]
-    fun test_mint_with_invalid_creator(creator: &signer, user: &signer) {
+    fun test_mint_errors_with_invalid_creator(
+        creator: &signer, user: &signer
+    ) {
         create_mofu_collection(creator);
         mint_token(user, 0);
     }
 
     #[test(creator = @bridge)]
     #[expected_failure(abort_code = 131074, location = aptos_token_objects::collection)]
-    fun test_mint_fails_with_oversize(creator: &signer) {
+    fun test_mint_errors_with_oversize(creator: &signer) {
         create_mofu_collection_for_testing(creator);
         mint_token(creator, 0);
         mint_token(creator, 1);

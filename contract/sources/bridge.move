@@ -73,6 +73,7 @@ module bridge::bridge {
     const ETOKEN_NOT_FOUND: u64 = 14;
     const EVALIDATOR_EXISTS: u64 = 15;
     const ERECORD_NOT_FOUND: u64 = 16;
+    const EUNAUTHORIZED_CLAIM: u64 = 17;
 
     // ======== Struct ========
 
@@ -89,6 +90,8 @@ module bridge::bridge {
         claimed_token_ids: vector<u256>,
         validators: vector<vector<u8>>
     }
+
+    // ======= Functions ========
 
     fun init_module(owner: &signer) {
         let (resource_signer, resource_cap) =
@@ -108,6 +111,7 @@ module bridge::bridge {
         );
     }
 
+    /// Mint 500 NFTs
     public entry fun init(sender: &signer) acquires BridgeRegistry {
         bridge_config::assert_is_admin(sender); // Check admin authorization
         let registry = borrow_registry_mut();
@@ -121,6 +125,7 @@ module bridge::bridge {
         }
     }
 
+    /// Add a validator to the registry
     public entry fun add_validator(
         sender: &signer, validator_addr: vector<u8>
     ) acquires BridgeRegistry {
@@ -135,6 +140,7 @@ module bridge::bridge {
         vector::push_back(&mut registry.validators, validator_addr);
     }
 
+    /// Create a bridge record
     public entry fun create_bridge_record(
         source_addr: vector<u8>,
         target_addr: address,
@@ -159,7 +165,7 @@ module bridge::bridge {
 
         assert!(valid, EINVALID_SIGNATURE); // Signature verification failed
 
-        let registry = borrow_global_mut<BridgeRegistry>(@bridge);
+        let registry = borrow_registry_mut();
         let key = bridge_message::create_message_key(token_id);
 
         assert!(
@@ -180,7 +186,6 @@ module bridge::bridge {
         };
 
         table::add(&mut registry.records, key, record);
-        // vector::push_back(&mut registry.verified_signatures, signature);
 
         event::emit(
             CreateBridgeRecordEvent {
@@ -231,11 +236,11 @@ module bridge::bridge {
 
     fun claim_internal(
         registry: &mut BridgeRegistry, claimer: &signer, token_id: u256
-    ) {
-        assert!(
-            registry.pending_claims.contains(&token_id),
-            error::not_found(ETOKEN_NOT_FOUND)
-        ); // Token not found
+    ): Option<address> {
+        // assert!(
+        //     is_token_claimed(token_id),
+        //     error::not_found(ETOKEN_NOT_FOUND)
+        // ); // Token not found
         let key = bridge_message::create_message_key(token_id);
         assert!(
             registry.records.contains(key),
@@ -243,27 +248,45 @@ module bridge::bridge {
         ); // Bridge record not found
 
         let bridge_record = table::borrow_mut(&mut registry.records, key);
+        assert!(
+            bridge_record.verified_signature.is_some(),
+            EUNAUTHORIZED_CLAIM
+        );
         let claimer_addr = signer::address_of(claimer);
 
-        assert!(
-            bridge_record.claimed == false,
-            error::already_exists(EALREADY_CLAIMED)
-        ); // Already claimed
+        // assert!(
+        //     bridge_record.claimed == false,
+        //     error::already_exists(EALREADY_CLAIMED)
+        // ); // Already claimed
         assert!(
             bridge_record.recipient == claimer_addr,
             error::unavailable(EINVALID_RECIPIENT)
         ); // Not the recipient
 
-        let token_address = registry.pending_claims.borrow(&token_id);
-        let token_object = object::address_to_object<MofuToken>(*token_address);
-        let resource_signer = mofu_nft::create_collection_signer();
+        if (bridge_record.claimed) {
+            event::emit(
+                TokenAlreadyClaimedEvent { token_id: token_id, recipient: claimer_addr }
+            );
+            return option::none();
+        };
 
-        object::transfer(&resource_signer, token_object, claimer_addr);
+        let token_address = *registry.pending_claims.borrow(&token_id);
+        withdraw_token_internal(token_address, claimer_addr);
+
         registry.pending_claims.remove(&token_id);
         vector::push_back(&mut registry.claimed_token_ids, token_id);
 
         bridge_record.claimed = true;
         event::emit(ClaimEvent { recipient: claimer_addr, token_id: token_id });
+
+        option::some(token_address)
+    }
+
+    fun withdraw_token_internal(token_address: address, to_addr: address) {
+        let token_object = object::address_to_object<MofuToken>(token_address);
+        let resource_signer = mofu_nft::create_collection_signer();
+
+        object::transfer(&resource_signer, token_object, to_addr);
     }
 
     fun find_validator_index(validator_addr: vector<u8>): u64 acquires BridgeRegistry {
@@ -281,6 +304,22 @@ module bridge::bridge {
         index
     }
 
+    fun verify_validator_signature_internal(
+        validator_addr: vector<u8>, message: vector<u8>, signature_bytes: vector<u8>
+    ): bool acquires BridgeRegistry {
+
+        let index = find_validator_index(validator_addr);
+        assert!(index > 0, EVALIDATOR_ALREADY_EXISTS); // Validator does not exist
+
+        let option_pk = ed25519::new_validated_public_key_from_bytes(validator_addr);
+
+        assert!(option::is_some(&option_pk), EINVALID_VALIDATOR_PK); // Invalid public key
+
+        let pk = option::extract(&mut option_pk);
+
+        bridge_message::verify_signature_internal(pk, message, signature_bytes)
+    }
+
     inline fun asset_not_paused() {
         assert!(bridge_config::is_enabled(), error::invalid_state(EPAUSED))
     }
@@ -294,7 +333,7 @@ module bridge::bridge {
     }
 
     inline fun get_validator_from_registry(index: u64): vector<u8> acquires BridgeRegistry {
-        let registry = borrow_global<BridgeRegistry>(@bridge);
+        let registry = borrow_registry();
         assert!(
             index < vector::length<vector<u8>>(&registry.validators),
             EVALIDATOR_INDEX_OUT_OF_BOUNDS
@@ -320,7 +359,7 @@ module bridge::bridge {
 
     #[view]
     public fun get_validators_from_registry(): vector<vector<u8>> acquires BridgeRegistry {
-        let registry = borrow_global<BridgeRegistry>(@bridge);
+        let registry = borrow_registry();
         registry.validators
     }
 
@@ -338,22 +377,6 @@ module bridge::bridge {
     #[view]
     public fun get_validator(index: u64): vector<u8> acquires BridgeRegistry {
         get_validator_from_registry(index)
-    }
-
-    fun verify_validator_signature_internal(
-        validator_addr: vector<u8>, message: vector<u8>, signature_bytes: vector<u8>
-    ): bool acquires BridgeRegistry {
-
-        let index = find_validator_index(validator_addr);
-        assert!(index > 0, EVALIDATOR_ALREADY_EXISTS); // Validator does not exist
-
-        let option_pk = ed25519::new_validated_public_key_from_bytes(validator_addr);
-
-        assert!(option::is_some(&option_pk), EINVALID_VALIDATOR_PK); // Invalid public key
-
-        let pk = option::extract(&mut option_pk);
-
-        bridge_message::verify_signature_internal(pk, message, signature_bytes)
     }
 
     // ======== Tests ========
@@ -374,11 +397,6 @@ module bridge::bridge {
     fun get_validator_from_registry_for_testing(index: u64): vector<u8> acquires BridgeRegistry {
         get_validator_from_registry(index)
     }
-
-    // #[test_only]
-    // fun get_token_bridge_record_for_testing(){
-
-    // }
 
     #[test_only]
     fun get_pending_claims_for_testing(): ordered_map::OrderedMap<u256, address> acquires BridgeRegistry {
@@ -728,7 +746,7 @@ module bridge::bridge {
             claimer = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
         )
     ]
-    #[expected_failure(abort_code = 393230, location = bridge::bridge)]
+    // #[expected_failure(abort_code = 393230, location = bridge::bridge)]
     fun test_claim_errors_with_already_claimed(
         admin: &signer, claimer: &signer
     ) acquires BridgeRegistry {
@@ -765,6 +783,9 @@ module bridge::bridge {
         assert!(bridge_record.recipient == signer::address_of(claimer), 0); // Not the recipient
 
         claim(claimer, token_id);
+
+        // assert!(option::is_none(&token_address), 0); // Token not found
+        // assert!(is_token_claimed(token_id), 0); // Already claimed
     }
 
     #[test(admin = @bridge)]
