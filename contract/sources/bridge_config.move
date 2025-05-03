@@ -17,13 +17,11 @@ module bridge::bridge_config {
         enabled: bool
     }
 
+    // ======== Public Package Functions ========
+
     public(friend) fun init_config(owner: &signer, admin: address) {
         let config = BridgeConfig { admin, enabled: true };
         move_to(owner, config);
-    }
-
-    inline fun assert_config_present() {
-        assert!(exists<BridgeConfig>(@bridge), ECONFIG_NOT_EXISTS);
     }
 
     public fun is_enabled(): bool acquires BridgeConfig {
@@ -32,17 +30,13 @@ module bridge::bridge_config {
         return config.enabled
     }
 
-    public fun is_admin(config: &BridgeConfig, addr: address): bool {
-        return config.admin == addr
-    }
-
     public(friend) fun set_enabled(sender: &signer, enabled: bool) acquires BridgeConfig {
         assert_config_present();
         let config = borrow_global_mut<BridgeConfig>(@bridge);
         let addr = signer::address_of(sender);
         assert!(
             is_admin(config, addr),
-            error::permission_denied(ENOT_AUTHORIZED)
+            error::permission_denied(ENOT_AUTHORIZED) // code 196621
         );
         config.enabled = enabled;
     }
@@ -53,9 +47,22 @@ module bridge::bridge_config {
         let addr = signer::address_of(sender);
         assert!(
             is_admin(config, addr),
-            error::permission_denied(ENOT_AUTHORIZED)
+            error::permission_denied(ENOT_AUTHORIZED) // code 196621
         );
     }
+
+    // ======== Private Functions ========
+
+    inline fun is_admin(config: &BridgeConfig, addr: address): bool {
+        if (config.admin == addr) { true }
+        else { false }
+    }
+
+    inline fun assert_config_present() {
+        assert!(exists<BridgeConfig>(@bridge), ECONFIG_NOT_EXISTS);
+    }
+
+    // ======== Views ========
 
     #[view]
     public fun get_admin(): address acquires BridgeConfig {
@@ -63,6 +70,8 @@ module bridge::bridge_config {
         let config = borrow_global<BridgeConfig>(@bridge);
         return config.admin
     }
+
+    // ======== Tests ========
 
     #[test(sender = @bridge)]
     public fun test_init_config(sender: &signer) acquires BridgeConfig {

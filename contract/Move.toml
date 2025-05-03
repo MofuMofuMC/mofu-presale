@@ -5,14 +5,15 @@ authors = []
 
 [addresses]
 bridge = "_"
-admin_addr = "_"
+# admin_addr = "_"
 
 [dev-addresses]
-bridge = "0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8"
+bridge = "0x1234"
+# admin_addr = "0x731e36c20fa090d98c5826cb0a99684158dd3c80b02aa8b60bd18e9cbb6e92d0"
 
 [dependencies]
 AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-framework", rev = "mainnet" }
-AptosToken = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-token", rev = "mainnet" }
+# AptosToken = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-token", rev = "mainnet" }
 AptosTokenObjects = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-token-objects", rev = "mainnet" }
 
 [dev-dependencies]

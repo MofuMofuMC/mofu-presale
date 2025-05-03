@@ -74,7 +74,8 @@ module bridge::mofu_nft {
 
         move_to(&object_signer, mofu_token);
 
-        let token_object = object::object_from_constructor_ref<MofuToken>(&constructor_ref);
+        let token_object =
+            object::object_from_constructor_ref<MofuToken>(&constructor_ref);
 
         assert!(
             (token::index(token_object) - 1) == (token_id as u64),
@@ -87,7 +88,8 @@ module bridge::mofu_nft {
 
     public(friend) fun create_collection_signer(): signer acquires MofuCollection {
         let mofu_collection = borrow_global<MofuCollection>(@bridge);
-        let collection_signer = account::create_signer_with_capability(&mofu_collection.admin_cap);
+        let collection_signer =
+            account::create_signer_with_capability(&mofu_collection.admin_cap);
         collection_signer
     }
 
@@ -128,7 +130,9 @@ module bridge::mofu_nft {
 
     #[test_only]
     /// Borrow the MofuToken resource for a given token, ensuring the caller is the creator.
-    inline fun authorized_borrow<T: key>(token: &Object<T>, creator: &signer): &MofuToken {
+    inline fun authorized_borrow<T: key>(
+        token: &Object<T>, creator: &signer
+    ): &MofuToken {
         let token_address = object::object_address(token);
         assert!(
             exists<MofuToken>(token_address),
@@ -193,8 +197,11 @@ module bridge::mofu_nft {
 
         let collection_name = string::utf8(COLLECTION_NAME);
         let collection_address =
-            collection::create_collection_address(&signer::address_of(creator), &collection_name);
-        let collection = object::address_to_object<collection::Collection>(collection_address);
+            collection::create_collection_address(
+                &signer::address_of(creator), &collection_name
+            );
+        let collection =
+            object::address_to_object<collection::Collection>(collection_address);
         assert!(object::owner(collection) == signer::address_of(creator), 0);
         assert!(collection::count(collection) == option::some(0), 0);
     }
@@ -231,23 +238,24 @@ module bridge::mofu_nft {
 
         // let collection_name = string::utf8(COLLECTION_NAME);
         let collection_address =
-            collection::create_collection_address(&signer::address_of(creator), &collection_name);
+            collection::create_collection_address(
+                &signer::address_of(creator), &collection_name
+            );
 
-        let collection = object::address_to_object<collection::Collection>(collection_address);
+        let collection =
+            object::address_to_object<collection::Collection>(collection_address);
 
         // //
         assert!(collection::count(collection) == option::some(2), 0);
     }
-
-    // #[test_only]
-    // use aptos_framework::aggregator_v2::{Self};
 
     #[test(creator = @bridge)]
     fun test_token_ids(creator: &signer) {
         create_mofu_collection(creator);
         let token_id = 0;
         let token_address = mint_token(creator, token_id);
-        let token_object = object::address_to_object<token::TokenIdentifiers>(token_address);
+        let token_object =
+            object::address_to_object<token::TokenIdentifiers>(token_address);
 
         let token_name = token::name(token_object);
 
@@ -287,14 +295,14 @@ module bridge::mofu_nft {
     }
 
     #[test(creator = @bridge, user = @0x345)]
-    #[expected_failure(abort_code = 393218)]
+    #[expected_failure(abort_code = 393218, location = aptos_framework::object)]
     fun test_mint_with_invalid_creator(creator: &signer, user: &signer) {
         create_mofu_collection(creator);
         mint_token(user, 0);
     }
 
     #[test(creator = @bridge)]
-    #[expected_failure(abort_code = 131074)]
+    #[expected_failure(abort_code = 131074, location = aptos_token_objects::collection)]
     fun test_mint_fails_with_oversize(creator: &signer) {
         create_mofu_collection_for_testing(creator);
         mint_token(creator, 0);
@@ -303,6 +311,5 @@ module bridge::mofu_nft {
         mint_token(creator, 3);
         mint_token(creator, 4);
         mint_token(creator, 5);
-
     }
 }

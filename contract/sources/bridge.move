@@ -30,6 +30,12 @@ module bridge::bridge {
     }
 
     #[event]
+    struct AdminWithdrawEvent has drop, store {
+        token_id: u256,
+        recipient: address
+    }
+
+    #[event]
     struct ValidatorAddedEvent has drop, store {
         validator_addr: vector<u8>
     }
@@ -39,13 +45,23 @@ module bridge::bridge {
         validator_addr: vector<u8>
     }
 
+    #[event]
+    struct TokenAlreadyClaimedEvent has drop, store {
+        token_id: u256,
+        recipient: address
+    }
+
+    #[event]
+    struct EmergencyPauseEvent has drop, store {
+        paused: bool
+    }
+
     // ======== Error codes ========
 
     const ENOT_AUTHORIZED: u64 = 1;
     const EINVALID_SIGNATURE: u64 = 2;
     const EINVALID_VALIDATOR: u64 = 3;
     const EVALIDATOR_ALREADY_EXISTS: u64 = 4;
-    // const EVALIDATOR_NOT_FOUND: u64 = 5;
     const EINVALID_VALIDATOR_ADDR: u64 = 6;
     const EINVALID_VALIDATOR_ADDR_LENGTH: u64 = 7;
     const EALREADY_CLAIMED: u64 = 8;
@@ -70,22 +86,21 @@ module bridge::bridge {
     struct BridgeRegistry has key {
         records: Table<BridgeMessageKey, BridgeRecord>,
         pending_claims: ordered_map::OrderedMap<u256, address>,
-        claimed_tokens: vector<u256>,
+        claimed_token_ids: vector<u256>,
         validators: vector<vector<u8>>
     }
 
     fun init_module(owner: &signer) {
-        let (resource_signer, resource_cap) = account::create_resource_account(
-            owner, b"Mofu Bridge"
-        );
+        let (resource_signer, resource_cap) =
+            account::create_resource_account(owner, b"Mofu Mofu Genesis Bridge");
 
         mofu_nft::init(owner, &resource_signer, resource_cap);
-        bridge_config::init_config(owner, @admin_addr);
+        bridge_config::init_config(owner, signer::address_of(owner));
 
         move_to(
             owner,
             BridgeRegistry {
-                claimed_tokens: vector::empty<u256>(),
+                claimed_token_ids: vector::empty<u256>(),
                 validators: vector::empty<vector<u8>>(),
                 records: table::new(),
                 pending_claims: ordered_map::new()
@@ -95,7 +110,7 @@ module bridge::bridge {
 
     public entry fun init(sender: &signer) acquires BridgeRegistry {
         bridge_config::assert_is_admin(sender); // Check admin authorization
-        let registry = borrow_global_mut<BridgeRegistry>(@bridge);
+        let registry = borrow_registry_mut();
         let resource_signer = mofu_nft::create_collection_signer();
 
         for (i in 0..500) {
@@ -106,7 +121,9 @@ module bridge::bridge {
         }
     }
 
-    public entry fun add_validator(sender: &signer, validator_addr: vector<u8>) acquires BridgeRegistry {
+    public entry fun add_validator(
+        sender: &signer, validator_addr: vector<u8>
+    ) acquires BridgeRegistry {
         bridge_config::assert_is_admin(sender); // Check admin authorization
         assert!(
             vector::length<u8>(&validator_addr) == 32,
@@ -130,10 +147,15 @@ module bridge::bridge {
 
         let message_hash =
             bridge_message::create_message_hash_internal(
-                source_addr, target_addr, token_id, bridge_seq_num
+                source_addr,
+                target_addr,
+                token_id,
+                bridge_seq_num
             );
 
-        let valid = verify_validator_signature_internal(validator, message_hash, signature);
+        let valid = verify_validator_signature_internal(
+            validator, message_hash, signature
+        );
 
         assert!(valid, EINVALID_SIGNATURE); // Signature verification failed
 
@@ -147,7 +169,10 @@ module bridge::bridge {
 
         let record = BridgeRecord {
             message: bridge_message::create_message(
-                bridge_seq_num, token_id, source_addr, target_addr
+                bridge_seq_num,
+                token_id,
+                source_addr,
+                target_addr
             ),
             verified_signature: option::some(signature),
             claimed: false,
@@ -167,6 +192,7 @@ module bridge::bridge {
         );
     }
 
+    /// Batch claim tokens after they have been bridged
     public entry fun batch_claim(claimer: &signer, token_ids: vector<u256>) acquires BridgeRegistry {
         asset_not_paused();
         let registry = borrow_registry_mut();
@@ -191,7 +217,9 @@ module bridge::bridge {
     }
 
     /// Remove a validator from the registry
-    public entry fun remove_validator(sender: &signer, validator_addr: vector<u8>) acquires BridgeRegistry {
+    public entry fun remove_validator(
+        sender: &signer, validator_addr: vector<u8>
+    ) acquires BridgeRegistry {
         bridge_config::assert_is_admin(sender); // Check admin authorization
 
         let index = find_validator_index(validator_addr);
@@ -207,12 +235,12 @@ module bridge::bridge {
         assert!(
             registry.pending_claims.contains(&token_id),
             error::not_found(ETOKEN_NOT_FOUND)
-        ); // Not the recipient
+        ); // Token not found
         let key = bridge_message::create_message_key(token_id);
         assert!(
             registry.records.contains(key),
             error::not_found(ERECORD_NOT_FOUND)
-        ); // Not the recipient
+        ); // Bridge record not found
 
         let bridge_record = table::borrow_mut(&mut registry.records, key);
         let claimer_addr = signer::address_of(claimer);
@@ -232,14 +260,10 @@ module bridge::bridge {
 
         object::transfer(&resource_signer, token_object, claimer_addr);
         registry.pending_claims.remove(&token_id);
-        vector::push_back(&mut registry.claimed_tokens, token_id);
+        vector::push_back(&mut registry.claimed_token_ids, token_id);
 
         bridge_record.claimed = true;
         event::emit(ClaimEvent { recipient: claimer_addr, token_id: token_id });
-    }
-
-    inline fun asset_not_paused() {
-        assert!(bridge_config::is_enabled(), error::invalid_state(EPAUSED))
     }
 
     fun find_validator_index(validator_addr: vector<u8>): u64 acquires BridgeRegistry {
@@ -255,6 +279,10 @@ module bridge::bridge {
         };
 
         index
+    }
+
+    inline fun asset_not_paused() {
+        assert!(bridge_config::is_enabled(), error::invalid_state(EPAUSED))
     }
 
     inline fun borrow_registry(): &BridgeRegistry acquires BridgeRegistry {
@@ -279,13 +307,13 @@ module bridge::bridge {
 
     #[view]
     public fun is_token_claimed(token_id: u256): bool acquires BridgeRegistry {
-        let registry = borrow_global<BridgeRegistry>(@bridge);
-        !vector::contains(&registry.claimed_tokens, &token_id)
+        let registry = borrow_registry();
+        vector::contains(&registry.claimed_token_ids, &token_id)
     }
 
     #[view]
     public fun is_token_bridged(token_id: u256): bool acquires BridgeRegistry {
-        let registry = borrow_global<BridgeRegistry>(@bridge);
+        let registry = borrow_registry();
 
         registry.records.contains(bridge_message::create_message_key(token_id))
     }
@@ -328,7 +356,35 @@ module bridge::bridge {
         bridge_message::verify_signature_internal(pk, message, signature_bytes)
     }
 
-    // ======== Test ========
+    // ======== Tests ========
+
+    #[test_only]
+    fun verify_validator_signature_internal_for_testing(
+        validator_addr: vector<u8>, message: vector<u8>, signature_bytes: vector<u8>
+    ): bool acquires BridgeRegistry {
+        verify_validator_signature_internal(validator_addr, message, signature_bytes)
+    }
+
+    #[test_only]
+    fun find_validator_index_for_testing(validator_addr: vector<u8>): u64 acquires BridgeRegistry {
+        find_validator_index(validator_addr)
+    }
+
+    #[test_only]
+    fun get_validator_from_registry_for_testing(index: u64): vector<u8> acquires BridgeRegistry {
+        get_validator_from_registry(index)
+    }
+
+    // #[test_only]
+    // fun get_token_bridge_record_for_testing(){
+
+    // }
+
+    #[test_only]
+    fun get_pending_claims_for_testing(): ordered_map::OrderedMap<u256, address> acquires BridgeRegistry {
+        let registry = borrow_registry();
+        registry.pending_claims
+    }
 
     #[test_only]
     use std::string;
@@ -336,35 +392,15 @@ module bridge::bridge {
     #[test_only]
     use aptos_token_objects::collection::{Self};
 
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 393232)]
-    fun test_claim_fails_when_token_unavailable(sender: &signer) acquires BridgeRegistry {
-        // Init and prepare a bridge record without preminting tokens
-        init_module(sender);
-        let validator = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
-        add_validator(sender, validator);
-
-        init(sender);
-        // Create bridge record but don't premint
-        create_bridge_record(
-            b"1234567890abcdef1234567890abcdef12345678",
-            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8,
-            10,
-            0,
-            0,
-            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03"
-        );
-
-        // Try to claim without available token
-        claim(sender, 11);
+    #[test_only]
+    fun init_for_testing(admin: &signer) acquires BridgeRegistry {
+        init_module(admin);
+        init(admin);
     }
 
-    #[test(sender = @bridge, claimer = @0x33)]
-    fun test_premint_success(sender: &signer) acquires BridgeRegistry {
-        init_module(sender);
-        init(sender);
-
-        // let registry = borrow_registry();
+    #[test(admin = @bridge, claimer = @0x33)]
+    fun test_init_ok(admin: &signer) acquires BridgeRegistry {
+        init_for_testing(admin);
 
         let resource_signer = mofu_nft::create_collection_signer();
         let collection_name = string::utf8(b"Mofu Mofu Music Caravan");
@@ -372,7 +408,8 @@ module bridge::bridge {
             collection::create_collection_address(
                 &signer::address_of(&resource_signer), &collection_name
             );
-        let collection = object::address_to_object<collection::Collection>(collection_address);
+        let collection =
+            object::address_to_object<collection::Collection>(collection_address);
 
         assert!(collection::count(collection) == option::some(500), 0);
 
@@ -383,126 +420,153 @@ module bridge::bridge {
         assert!(pending_claims_length == 500, 0);
     }
 
-    #[test(admin = @bridge, sender = @0x1A)]
-    #[expected_failure(abort_code = 327681)]
-    fun test_premint_fails_with_user(admin: &signer, sender: &signer) acquires BridgeRegistry {
+    #[
+        test(
+            owner = @bridge,
+            claimer = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
+        )
+    ]
+    #[expected_failure(abort_code = 393232, location = bridge::bridge)]
+    fun test_claim_errors_when_nft_collection_is_not_ready(
+        owner: &signer, claimer: &signer
+    ) acquires BridgeRegistry {
+        init_for_testing(owner);
+
+        let validator =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        add_validator(owner, validator);
+        create_bridge_record(
+            b"1234567890abcdef1234567890abcdef12345678",
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8,
+            10,
+            0,
+            0,
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03"
+        );
+
+        // Try to claim without available token
+        claim(claimer, 11);
+    }
+
+    #[test(admin = @bridge, sender = @0x1B)]
+    #[expected_failure(abort_code = 327681, location = bridge::bridge_config)]
+    fun test_init_errors_with_execute_by_user(
+        admin: &signer, sender: &signer
+    ) acquires BridgeRegistry {
         init_module(admin);
         init(sender);
     }
 
-    #[test(sender = @bridge)]
-    fun test_validator_management_success(sender: &signer) acquires BridgeRegistry {
-        // Set up test environment
-        let validator = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    #[test(admin = @bridge)]
+    fun test_add_validator_ok(admin: &signer) acquires BridgeRegistry {
+        let validator =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+
+        init_module(admin);
+        add_validator(admin, validator);
+        let validator_exists = find_validator_index_for_testing(validator);
+        assert!(validator_exists > 0, 0);
+    }
+
+    #[test(admin = @bridge)]
+    fun test_remove_validator_ok(admin: &signer) acquires BridgeRegistry {
+        let validator =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
 
         // Initialize module with admin
-        init_module(sender);
+        init_module(admin);
 
-        // Add validator
-        add_validator(sender, validator);
+        add_validator(admin, validator);
 
-        // Check if validator exists
-        let validator_exists = find_validator_index(validator);
-        // debug::print(&validator_exists);
+        let validator_exists = find_validator_index_for_testing(validator);
         assert!(validator_exists > 0, 0);
 
-        // // Remove validator
-        remove_validator(sender, validator);
+        remove_validator(admin, validator);
 
-        // // Check if validator was removed
         let validator_count = get_validator_count();
         assert!(validator_count == 0, 0);
     }
 
-    #[test(sender = @bridge)]
-    fun test_verify_signature_success(sender: &signer) acquires BridgeRegistry {
-        // let sender_addr = signer::address_of(sender);
-        // Set up test environment
-        let validator = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+    #[test(admin = @bridge)]
+    fun test_verify_bridge_signature_ok(admin: &signer) acquires BridgeRegistry {
+        let validator =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
 
-        // Initialize module with admin
-        init_module(sender);
+        init_module(admin);
 
-        // Add validator
-        add_validator(sender, validator);
+        add_validator(admin, validator);
 
         let validator = get_validator_from_registry(0);
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
         let token_id = 10;
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let nonce = 0;
         let message_hash =
-            bridge_message::create_message_hash_internal(source_addr, target_addr, token_id, nonce);
+            bridge_message::create_message_hash_internal(
+                source_addr, target_addr, token_id, nonce
+            );
 
-        let valid = verify_validator_signature_internal(validator, message_hash, signature);
+        let valid =
+            verify_validator_signature_internal_for_testing(
+                validator, message_hash, signature
+            );
 
-        assert!(valid, EINVALID_SIGNATURE); // Signature verification failed
-
+        assert!(valid, 0); // Signature verification failed
     }
 
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 0x50001)]
-    fun test_add_validator_fails_with_normal_user(sender: &signer) acquires BridgeRegistry {
-        let mock_user = account::create_signer_for_test(@0x11);
-        // Set up test environment
-        let validator = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    #[test(admin = @bridge, user = @0x11)]
+    #[expected_failure(abort_code = 327681, location = bridge::bridge_config)]
+    fun test_add_validator_errors_with_execute_by_normal_user(
+        admin: &signer, user: &signer
+    ) acquires BridgeRegistry {
+        let validator =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
 
-        // Initialize module with admin
-        init_module(sender);
-
-        // Add validator
-        add_validator(&mock_user, validator);
+        init_module(admin);
+        add_validator(user, validator);
     }
 
-    #[test(sender = @bridge)]
+    #[test(admin = @bridge)]
     #[expected_failure(abort_code = EVALIDATOR_EXISTS)]
-    fun test_add_validator_fails_with_duplicate(sender: &signer) acquires BridgeRegistry {
-        // let mock_user = account::create_signer_for_test(@0x11);
-        // Set up test environment
-        let validator = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    fun test_add_validator_errors_with_already_exists(admin: &signer) acquires BridgeRegistry {
+        let validator =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
 
-        // Initialize module with admin
-        init_module(sender);
-
-        // Add validator
-        add_validator(sender, validator);
-        add_validator(sender, validator);
+        init_module(admin);
+        add_validator(admin, validator);
+        add_validator(admin, validator);
     }
 
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 0x50001)]
-    fun test_remove_validator_fails_with_normal_user(sender: &signer) acquires BridgeRegistry {
-        let mock_user = account::create_signer_for_test(@0x11);
-        // Set up test environment
-        let validator = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    #[test(admin = @bridge, user = @0x11)]
+    #[expected_failure(abort_code = 327681, location = bridge::bridge_config)]
+    fun test_remove_validator_errors_with_execute_by_normal_user(
+        admin: &signer, user: &signer
+    ) acquires BridgeRegistry {
+        let validator =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
 
-        // Initialize module with admin
-        init_module(sender);
-
-        // Add validator
-        add_validator(sender, validator);
-
-        // // // Remove validator
-        remove_validator(&mock_user, validator);
-
+        init_module(admin);
+        add_validator(admin, validator);
+        remove_validator(user, validator);
     }
 
-    #[test(sender = @bridge)]
-    fun test_create_bridge_record_success(sender: &signer) acquires BridgeRegistry {
+    #[test(admin = @bridge)]
+    fun test_create_bridge_record_ok(admin: &signer) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
 
         let nonce = 0;
-        init_module(sender);
-
-        add_validator(sender, validator_addr);
-
+        init_module(admin);
+        add_validator(admin, validator_addr);
         create_bridge_record(
             source_addr,
             target_addr,
@@ -511,47 +575,44 @@ module bridge::bridge {
             0,
             signature
         );
-        // Add validator
-
-        let registry = borrow_global<BridgeRegistry>(@bridge);
-
+        let registry = borrow_registry();
         assert!(
             registry.records.contains(bridge_message::create_message_key(token_id)),
             0
         );
 
-        let record = table::borrow(
-            &registry.records,
-            bridge_message::create_message_key(token_id)
-        );
+        let record =
+            table::borrow(
+                &registry.records,
+                bridge_message::create_message_key(token_id)
+            );
 
         assert!(record.claimed == false, 0); // Not yet claimed
         assert!(record.recipient == target_addr, 0); //
-        let (seq_num, token_id, source_addr, target_addr) =
+        let (seq_num, token_id, _source_addr, _target_addr) =
             bridge_message::extract_message(&record.message);
         assert!(seq_num == nonce, 0); // Sequence number equal
         assert!(token_id == token_id, 0); // Token ID equal
-
-        // assert!(record.message.source_addr == source_addr, 0); //
-        // assert!(record.message.target_addr == target_addr, 0); //
-        // assert!(record.message.token_id == token_id, 0); //
-        // assert!(record.message.seq_num == nonce, 0); //
         assert!(record.verified_signature == option::some(signature), 0); // Signature verified
     }
 
-    #[test(sender = @bridge)]
+    #[test(admin = @bridge)]
     #[expected_failure(abort_code = EVALIDATOR_INDEX_OUT_OF_BOUNDS)]
-    fun test_create_bridge_record_fails_with_invalid_validator(sender: &signer) acquires BridgeRegistry {
+    fun test_create_bridge_record_errors_with_none_exist_validator(
+        admin: &signer
+    ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let nonce = 0;
-        init_module(sender);
+        init_module(admin);
 
-        add_validator(sender, validator_addr);
+        add_validator(admin, validator_addr);
 
         create_bridge_record(
             source_addr,
@@ -563,20 +624,57 @@ module bridge::bridge {
         );
     }
 
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = ERECORD_ALREADY_EXISTS)]
-    fun test_create_bridge_record_fails_with_duplicate(sender: &signer) acquires BridgeRegistry {
+    #[test(admin = @bridge)]
+    #[expected_failure(abort_code = 10, location = bridge::bridge)]
+    fun test_create_bridge_record_errors_with_invalid_validator(
+        admin: &signer
+    ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let signature =
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;
+        init_module(admin);
+
+        add_validator(
+            admin,
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd"
+        );
+        add_validator(
+            admin,
+            x"6807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd"
+        );
+
+        create_bridge_record(
+            source_addr,
+            target_addr,
+            token_id,
+            nonce,
+            1,
+            signature
+        );
+    }
+
+    #[test(admin = @bridge)]
+    #[expected_failure(abort_code = ERECORD_ALREADY_EXISTS)]
+    fun test_create_bridge_record_errors_with_already_exists(
+        admin: &signer
+    ) acquires BridgeRegistry {
+        let source_addr = b"1234567890abcdef1234567890abcdef12345678";
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let token_id = 10 as u256;
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let nonce = 0;
 
-        init_module(sender);
+        init_module(admin);
 
-        add_validator(sender, validator_addr);
+        add_validator(admin, validator_addr);
 
         create_bridge_record(
             source_addr,
@@ -596,19 +694,23 @@ module bridge::bridge {
         );
     }
 
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = EINVALID_SIGNATURE)]
-    fun test_create_bridge_record_fails_with_invalid_signature(sender: &signer) acquires BridgeRegistry {
+    #[test(admin = @bridge)]
+    #[expected_failure(abort_code = 2, location = bridge::bridge)]
+    fun test_create_bridge_record_errors_with_invalid_signature(
+        admin: &signer
+    ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"052b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let nonce = 0;
-        init_module(sender);
+        init_module(admin);
 
-        add_validator(sender, validator_addr);
+        add_validator(admin, validator_addr);
 
         create_bridge_record(
             source_addr,
@@ -622,22 +724,26 @@ module bridge::bridge {
 
     #[
         test(
-            sender = @bridge,
-            user = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
+            admin = @bridge,
+            claimer = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
         )
     ]
-    #[expected_failure(abort_code = 393230)]
-    fun test_claim_fails_with_duplicate(sender: &signer, user: &signer) acquires BridgeRegistry {
+    #[expected_failure(abort_code = 393230, location = bridge::bridge)]
+    fun test_claim_errors_with_already_claimed(
+        admin: &signer, claimer: &signer
+    ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let nonce = 0;
-        init_module(sender);
+        init_module(admin);
 
-        add_validator(sender, validator_addr);
+        add_validator(admin, validator_addr);
 
         create_bridge_record(
             source_addr,
@@ -648,32 +754,124 @@ module bridge::bridge {
             signature
         );
 
-        init(sender);
-        claim(user, token_id);
+        init(admin);
+        claim(claimer, token_id);
 
         let registry = borrow_global<BridgeRegistry>(@bridge);
         let key = bridge_message::create_message_key(token_id);
 
         let bridge_record = table::borrow(&registry.records, key);
         assert!(bridge_record.claimed == true, 0); // Already claimed
-        assert!(bridge_record.recipient == signer::address_of(user), 0); // Not the recipient
+        assert!(bridge_record.recipient == signer::address_of(claimer), 0); // Not the recipient
+
+        claim(claimer, token_id);
+    }
+
+    #[test(admin = @bridge)]
+    fun test_set_enabled_ok(admin: &signer) {
+        init_module(admin);
+        set_enabled(admin, true);
+        set_enabled(admin, false);
+    }
+
+    #[test(admin = @bridge, user = @0x11)]
+    #[expected_failure(abort_code = 327681, location = bridge::bridge_config)]
+    fun test_set_enabled_errors_with_execute_by_normal_user(
+        admin: &signer, user: &signer
+    ) {
+        init_module(admin);
+        set_enabled(user, false);
+    }
+
+    #[
+        test(
+            admin = @bridge,
+            claimer = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
+        )
+    ]
+    #[expected_failure(abort_code = 196621, location = bridge::bridge)]
+    fun test_claim_errors_with_paused(admin: &signer, claimer: &signer) acquires BridgeRegistry {
+        let source_addr = b"1234567890abcdef1234567890abcdef12345678";
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let token_id = 10 as u256;
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let signature =
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;
+        init_module(admin);
+
+        add_validator(admin, validator_addr);
+
+        create_bridge_record(
+            source_addr,
+            target_addr,
+            token_id,
+            nonce,
+            0,
+            signature
+        );
+
+        set_enabled(admin, false);
+
+        claim(claimer, token_id);
+    }
+
+    #[test(admin = @bridge, user = @0x11)]
+    #[expected_failure(abort_code = 851977, location = bridge::bridge)]
+    fun test_claim_errors_with_invalid_receipent(
+        admin: &signer, user: &signer
+    ) acquires BridgeRegistry {
+        let source_addr = b"1234567890abcdef1234567890abcdef12345678";
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let token_id = 10 as u256;
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let signature =
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
+        let nonce = 0;
+        init_module(admin);
+
+        add_validator(admin, validator_addr);
+
+        create_bridge_record(
+            source_addr,
+            target_addr,
+            token_id,
+            nonce,
+            0,
+            signature
+        );
+
+        init(admin);
+
         claim(user, token_id);
     }
 
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 196621)]
-    fun test_claim_fails_with_paused(sender: &signer) acquires BridgeRegistry {
-        // let sender_addr = signer::address_of(sender);
+    #[
+        test(
+            admin = @bridge,
+            claimer = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
+        )
+    ]
+    #[expected_failure(abort_code = 393232, location = bridge::bridge)]
+    fun test_claim_errors_with_invalid_token_id(
+        admin: &signer, claimer: &signer
+    ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let nonce = 0;
-        init_module(sender);
+        init_module(admin);
 
-        add_validator(sender, validator_addr);
+        add_validator(admin, validator_addr);
 
         create_bridge_record(
             source_addr,
@@ -684,48 +882,9 @@ module bridge::bridge {
             signature
         );
 
-        set_enabled(sender, false);
+        init(admin);
 
-        claim(sender, token_id);
-    }
-
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 0x50001)]
-    fun test_set_enabled_fails_with_normal_user(sender: &signer) {
-        let mock_user = account::create_signer_for_test(@0x11);
-        init_module(sender);
-
-        // Try to pause bridge with non-admin
-        set_enabled(&mock_user, false);
-    }
-
-    #[test(sender = @bridge)]
-    #[expected_failure(abort_code = 851977)]
-    fun test_claim_fails_with_invalid_receipent(sender: &signer) acquires BridgeRegistry {
-        let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
-        let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
-        let signature =
-            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
-        let nonce = 0;
-        init_module(sender);
-
-        add_validator(sender, validator_addr);
-
-        let mock_user1 = account::create_signer_for_test(@0x11);
-        create_bridge_record(
-            source_addr,
-            target_addr,
-            token_id,
-            nonce,
-            0,
-            signature
-        );
-
-        init(sender);
-
-        claim(&mock_user1, token_id);
+        claim(claimer, 8);
     }
 
     #[
@@ -734,9 +893,10 @@ module bridge::bridge {
             user = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
         )
     ]
-    fun test_batch_claim_success(sender: &signer, user: &signer) acquires BridgeRegistry {
+    fun test_batch_claim_ok(sender: &signer, user: &signer) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_ids = vector::empty<u256>();
         vector::push_back(&mut token_ids, 10);
         vector::push_back(&mut token_ids, 13);
@@ -750,7 +910,8 @@ module bridge::bridge {
             &mut signatures,
             x"f8d856dd36c1b60c6ffd8ab7677948f3d67eae516bd9be111ca5463874c1b46fd89c3bdee19943beddf23332e7327434a975662f4dc73400fdcd88e0093c100e"
         );
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let nonces = vector::empty<u64>();
         vector::push_back(&mut nonces, 0);
         vector::push_back(&mut nonces, 10);
@@ -778,22 +939,23 @@ module bridge::bridge {
         init(sender);
 
         batch_claim(user, token_ids);
-        assert!(is_token_claimed(10) == false, 0); // Token is not claimable
-        assert!(is_token_claimed(13) == false, 0); // Token is not claimable
+        assert!(is_token_claimed(10) == true, 0); // Token is claimed
+        assert!(is_token_claimed(13) == true, 0); // Token is claimed
     }
 
     #[
         test(
-            sender = @bridge,
-            user = @0x859bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
+            admin = @bridge,
+            claimer = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
         )
     ]
-    #[expected_failure(abort_code = 851977)]
-    fun test_batch_claim_fails_with_incorrect_user(
-        sender: &signer, user: &signer
+    #[expected_failure(abort_code = 196621, location = bridge::bridge)]
+    fun test_batch_claim_errors_with_paused(
+        admin: &signer, claimer: &signer
     ) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_ids = vector::empty<u256>();
         vector::push_back(&mut token_ids, 10);
         vector::push_back(&mut token_ids, 13);
@@ -807,7 +969,68 @@ module bridge::bridge {
             &mut signatures,
             x"f8d856dd36c1b60c6ffd8ab7677948f3d67eae516bd9be111ca5463874c1b46fd89c3bdee19943beddf23332e7327434a975662f4dc73400fdcd88e0093c100e"
         );
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let nonces = vector::empty<u64>();
+        vector::push_back(&mut nonces, 0);
+        vector::push_back(&mut nonces, 10);
+
+        init_module(admin);
+
+        add_validator(admin, validator_addr);
+
+        for (i in 0..vector::length<u256>(&token_ids)) {
+            let token_id = vector::borrow(&token_ids, i);
+            let nonce = vector::borrow(&nonces, i);
+            let signature = vector::borrow(&signatures, i);
+
+            create_bridge_record(
+                source_addr,
+                target_addr,
+                *token_id,
+                *nonce,
+                0,
+                *signature
+            );
+
+            assert!(is_token_bridged(*token_id) == true, 0); // Token is claimable
+        };
+        init(admin);
+
+        set_enabled(admin, false);
+        batch_claim(claimer, token_ids);
+        assert!(is_token_claimed(10) == false, 0); // Token is claimed
+        assert!(is_token_claimed(13) == false, 0); // Token is claimed
+    }
+
+    #[
+        test(
+            sender = @bridge,
+            user = @0x859bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
+        )
+    ]
+    #[expected_failure(abort_code = 851977, location = bridge::bridge)]
+    fun test_batch_claim_errors_with_invalid_receipent(
+        sender: &signer, user: &signer
+    ) acquires BridgeRegistry {
+        let source_addr = b"1234567890abcdef1234567890abcdef12345678";
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let token_ids = vector::empty<u256>();
+        vector::push_back(&mut token_ids, 10);
+        vector::push_back(&mut token_ids, 13);
+
+        let signatures = vector::empty<vector<u8>>();
+        vector::push_back(
+            &mut signatures,
+            x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03"
+        );
+        vector::push_back(
+            &mut signatures,
+            x"f8d856dd36c1b60c6ffd8ab7677948f3d67eae516bd9be111ca5463874c1b46fd89c3bdee19943beddf23332e7327434a975662f4dc73400fdcd88e0093c100e"
+        );
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let nonces = vector::empty<u64>();
         vector::push_back(&mut nonces, 0);
         vector::push_back(&mut nonces, 10);
@@ -845,11 +1068,13 @@ module bridge::bridge {
             user = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8
         )
     ]
-    fun test_claim_success(sender: &signer, user: &signer) acquires BridgeRegistry {
+    fun test_claim_ok(sender: &signer, user: &signer) acquires BridgeRegistry {
         let source_addr = b"1234567890abcdef1234567890abcdef12345678";
-        let target_addr = @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
+        let target_addr =
+            @0x869bf628cd4dbcd4fac4c127677f97623b4345cd5a33e2e1b6d9e3df59dbc7f8;
         let token_id = 10 as u256;
-        let validator_addr = x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
+        let validator_addr =
+            x"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd";
         let signature =
             x"b52b37c6de6e9edbfe8af146ceb6e6077c1e391cda14bae836508c064d4905836e6bc2b6ec0ffba33c3e1d8a81982103469160f1c545576d068f1603a2ddde03";
         let nonce = 0;
@@ -871,24 +1096,23 @@ module bridge::bridge {
 
         assert!(is_token_bridged(token_id) == true, 0); // Token is claimable
         claim(user, token_id);
-        assert!(is_token_claimed(token_id) == false, 0); // Token is not claimable
+        assert!(is_token_claimed(token_id) == true, 0); // Token is claimed
         let registry = borrow_global<BridgeRegistry>(@bridge);
         let key = bridge_message::create_message_key(token_id);
         let bridge_record = table::borrow(&registry.records, key);
 
-        // assert!(registry.pending_claims.contains(&token_id) == false, 0); // Token is not claimable
         assert!(bridge_record.claimed == true, 0); // Already claimed
-        assert!(bridge_record.recipient == signer::address_of(user), 0); // Not the recipient
+        assert!(bridge_record.recipient == signer::address_of(user), 0); //
         assert!(registry.pending_claims.contains(&token_id) == false, 0); //
-        assert!(vector::length(&registry.claimed_tokens) == 1, 0); // Not the recipient
-        assert!(vector::contains(&registry.claimed_tokens, &token_id) == true, 0); // Not the recipient
-        assert!(registry.pending_claims.length() == 499, 0); // Not the recipient
-        // assert!(vector::length(&registry.verified_signatures) == 1, 0); // Signature not verified
+        assert!(vector::length(&registry.claimed_token_ids) == 1, 0); //
+        assert!(vector::contains(&registry.claimed_token_ids, &token_id) == true, 0); //
+        assert!(registry.pending_claims.length() == 499, 0); //
     }
 
     #[test(sender = @bridge)]
-    fun test_valid_signature_success(sender: &signer) acquires BridgeRegistry {
-        let validator_addr = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    fun test_valid_signature_ok(sender: &signer) acquires BridgeRegistry {
+        let validator_addr =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
         let message =
             b"283132333435363738393061626364656631323334353637383930616263646566313233343536373840633639373739316631313633396236653437303330363465363035306432383637653061343662326164333364376634666237623164643539666436653833320a00000000000000000000000000000000000000000000000000000000000000";
         let signature =
@@ -899,20 +1123,21 @@ module bridge::bridge {
         add_validator(sender, validator_addr);
 
         let is_valid =
-            verify_validator_signature_internal(
+            verify_validator_signature_internal_for_testing(
                 validator_addr,
                 message,
                 signature
                 // signer::address_of(sender)
             );
 
-        assert!(is_valid, EINVALID_SIGNATURE); // Signature verification failed
+        assert!(is_valid, 0); // Signature verification failed
     }
 
     #[test(sender = @bridge)]
     // #[expected_failure(abort_code=EINVALID_SIGNATURE)]
-    fun test_invalid_signature_success(sender: &signer) acquires BridgeRegistry {
-        let validator_addr = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    fun test_invalid_signature_ok(sender: &signer) acquires BridgeRegistry {
+        let validator_addr =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
         let message =
             b"283132333435363738393061626364656631323334353637383930616263646566313233343536373840633639373739316631313633396236653437303330363465363035306432383637653061343662326164333364376634666237623164643539666436653833320a00000000000000000000000000000000000000000000000000000000000000";
         let signature =
@@ -923,7 +1148,7 @@ module bridge::bridge {
         add_validator(sender, validator_addr);
 
         let is_valid =
-            verify_validator_signature_internal(
+            verify_validator_signature_internal_for_testing(
                 validator_addr,
                 message,
                 signature
@@ -933,9 +1158,12 @@ module bridge::bridge {
     }
 
     #[test(sender = @bridge, user = @0x123)]
-    #[expected_failure(abort_code = 327681)]
-    fun test_add_validator_fails_with_user(sender: &signer, user: &signer) acquires BridgeRegistry {
-        let validator_addr = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    #[expected_failure(abort_code = 327681, location = bridge::bridge_config)]
+    fun test_add_validator_errors_with_user(
+        sender: &signer, user: &signer
+    ) acquires BridgeRegistry {
+        let validator_addr =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
 
         init_module(sender);
 
@@ -945,8 +1173,11 @@ module bridge::bridge {
 
     #[test(sender = @bridge, user = @0x123)]
     #[expected_failure(abort_code = 327681)]
-    fun test_remove_validator_fails_with_user(sender: &signer, user: &signer) acquires BridgeRegistry {
-        let validator_addr = x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
+    fun test_remove_validator_errors_with_user(
+        sender: &signer, user: &signer
+    ) acquires BridgeRegistry {
+        let validator_addr =
+            x"efa6aa3e931861b065196884569123cdec7ab69bb3d02a88e8f8900008f8bbf8";
 
         init_module(sender);
 
