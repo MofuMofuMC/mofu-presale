@@ -1,33 +1,38 @@
-import { Aptos, AptosConfig, type ClientConfig, Network } from "@aptos-labs/ts-sdk";
+import {
+	AccountAddress,
+	Aptos,
+	AptosConfig,
+	type ClientConfig,
+	Hex,
+	MoveString,
+	Network,
+	U256,
+} from "@aptos-labs/ts-sdk";
 import { getAccount } from "./config";
 
+const PRESALE_CONTRACT_ADDRESS = process.env.MODULE_ADDRESS;
 async function main() {
+	// const clientConfig: ClientConfig = {
+	// 	API_KEY: "AG-FVEWZQTCTWH16J4DJMZOZCDP9NNN3MVM",
+	// };
+
 	const config = new AptosConfig({
 		network: Network.TESTNET,
+		// clientConfig,
 	});
 
 	const aptos = new Aptos(config);
 
-    // const aliceAccountBalance = await aptos.getAccountResource({
-    //     accountAddress: alice.accountAddress,
-    //     resourceType: COIN_STORE,
-    //   });
-
 	const account = getAccount();
-	// Transfer between users
+
 	const txn = await aptos.transaction.build.simple({
 		sender: account.accountAddress,
 		data: {
 			function:
-				"0x9685bb3f64680f2a7f02870fd867fb98abc6bea231802f7f12e0cf330155b996::bridge::add_validator",
+				`${PRESALE_CONTRACT_ADDRESS}::presale::set_accepted_coin_type`,
 			typeArguments: [],
 			functionArguments: [
-				Uint8Array.from(
-					Buffer.from(
-						"5807b7714a65b825b9abef874deb7c45904b0919461e514815585cbb0d9118cd",
-						"hex",
-					),
-				),
+				new MoveString("0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832"),
 			],
 		},
 	});

@@ -1,19 +1,21 @@
 [package]
-name = "MofuBridge"
+name = "presale"
 version = "1.0.0"
 authors = []
 
 [addresses]
-bridge = "_"
-# admin_addr = "_"
+presale = "_"
+treasury_addr = "_"
+admin_addr = "_"
 
 [dev-addresses]
-bridge = "0x1234"
-# admin_addr = "0x731e36c20fa090d98c5826cb0a99684158dd3c80b02aa8b60bd18e9cbb6e92d0"
+presale = "0x1234"
+treasury_addr = "0xd37bd145f24bfc3f365fc3892097e3d7345d99aeca84eca1c54c57b8ca03c414"
+admin_addr = "0xAA"
 
-[dependencies]
-AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-framework", rev = "mainnet" }
-# AptosToken = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-token", rev = "mainnet" }
-AptosTokenObjects = { git = "https://github.com/aptos-labs/aptos-framework.git", subdir = "aptos-token-objects", rev = "mainnet" }
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
 
 [dev-dependencies]

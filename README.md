@@ -31,3 +31,21 @@ aptos move publish --profile <your-profile> --assume-yes
 ```sh
 aptos move fmt --config max_width=100,indent_size=4
 ```
+
+Presale : 
+
+48 Hours window
+
+1500 supplies (Need to show the bar, and the bar can be faked)
+Genesis Holder + KOL (5 / wallet max)
+
+mint 1 = no codes
+mint 2 = no codes
+mint 3 = tier 2 codes (can use 10 times only)
+mint 4 = tier 2 codes (can use 10 times only)
+mint 5 = tier 1 codes (unlimited)
+
+Codes commissions :
+< 10 NFTs = 10% 
+10-19 NFTs = 13%
+> 19 NFTs = 15%

@@ -9,42 +9,31 @@ import {
 } from "@aptos-labs/ts-sdk";
 import { getAccount } from "./config";
 
-function byteString(str: string): Uint8Array {
-	const encoder = new TextEncoder();
-	return encoder.encode(str);
-}
-
+const PRESALE_CONTRACT_ADDRESS = process.env.MODULE_ADDRESS;
 async function main() {
-	const clientConfig: ClientConfig = {
-		API_KEY: "AG-FVEWZQTCTWH16J4DJMZOZCDP9NNN3MVM",
-	};
+	// const clientConfig: ClientConfig = {
+	// 	API_KEY: "AG-FVEWZQTCTWH16J4DJMZOZCDP9NNN3MVM",
+	// };
 
 	const config = new AptosConfig({
 		network: Network.TESTNET,
-		clientConfig,
+		// clientConfig,
 	});
 
 	const aptos = new Aptos(config);
 
 	const account = getAccount();
 
+	// 0xc5a5732db6cbb0407852fe98a515b1c83922091bc6bf21803d91eeb196f08f9d
+	// 0x8919974883ea656fa4ba059819573b55b55b09850cb723aba96b76c468d09645
 	const txn = await aptos.transaction.build.simple({
 		sender: account.accountAddress,
 		data: {
 			function:
-				"0xc451769e267d5be6757642af06cf1666bceb99e24a6cd781a5a18cb46602b4b8::bridge::create_bridge_record",
+				`${PRESALE_CONTRACT_ADDRESS}::presale::add_to_whitelist`,
 			typeArguments: [],
 			functionArguments: [
-				byteString("0774B9C929630246ed78D24EF5a4547C47e86231"),
-				AccountAddress.from(
-					"0x131c061aa9f2523e743765ce278f83fd189ead4678f1583368fc886c08999b86",
-				),
-				new U256(41),
-				0,
-				2,
-				Hex.fromHexString(
-					"40f09ab570fa5a31d66651527ad483e9c553118bc6eb66af3947368424a641b49d1ff8ccc947deaf2810cc49d31428cca989b6d6167d89187da47ab5bb8e6f790e",
-				).toUint8Array(),
+				AccountAddress.from("0x30ff8dca978a711b19730eb767a79377023390899e5c3b07c7e6e245a4998874")
 			],
 		},
 	});

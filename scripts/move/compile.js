@@ -2,21 +2,20 @@ require("dotenv").config();
 const cli = require("@aptos-labs/ts-sdk/dist/common/cli/index.js");
 
 async function compile() {
+	if (!process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS) {
+		throw new Error(
+			"MODULE_PUBLISHER_ACCOUNT_ADDRESS variable is not set, make sure you have set the publisher account address",
+		);
+	}
 
-  if (!process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS) {
-    throw new Error(
-      "MODULE_PUBLISHER_ACCOUNT_ADDRESS variable is not set, make sure you have set the publisher account address",
-    );
-  }
+	const move = new cli.Move();
 
-  const move = new cli.Move();
-
-  await move.compile({
-    packageDirectoryPath: "contract",
-    namedAddresses: {
-      admin_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
-      bridge: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
-    },
-  });
+	await move.compile({
+		packageDirectoryPath: "contract",
+		namedAddresses: {
+			presale: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
+			treasury_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
+		},
+	});
 }
 compile();
