@@ -2,6 +2,7 @@
 name = "presale"
 version = "1.0.0"
 authors = []
+upgrade_policy = "compatible"
 
 [addresses]
 presale = "_"
@@ -17,5 +18,10 @@ admin_addr = "0xAA"
 git = "https://github.com/aptos-labs/aptos-framework.git"
 rev = "mainnet"
 subdir = "aptos-framework"
+
+[dependencies.AptosTokenObjects]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-token-objects"
 
 [dev-dependencies]

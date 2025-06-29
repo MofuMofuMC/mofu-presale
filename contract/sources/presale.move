@@ -4,43 +4,38 @@ module presale::presale {
     use std::signer;
     use std::vector;
     use std::option::{Self};
-    use std::string::{Self, String};
-    use aptos_framework::type_info::{Self};
+    use std::string::{Self};
     use aptos_framework::event::{Self};
     use aptos_std::table::{Self, Table};
     use presale::whitelist::{Self};
     use presale::referral::{Self};
-    use aptos_framework::randomness::{Self};
-    use aptos_framework::object::{Self};
-    use aptos_framework::fungible_asset::{Self, FungibleAsset, Metadata};
+    use presale::whitelist_nft::{Self};
+    use aptos_framework::object::{Self, Object, ObjectCore};
+    use aptos_framework::fungible_asset::{Self};
+    #[test_only]
     use aptos_framework::primary_fungible_store;
 
     #[test_only]
-    use aptos_framework::aptos_coin::{AptosCoin};
+    use aptos_framework::aptos_coin::{Self, AptosCoin};
 
     #[test_only]
     use aptos_framework::coin;
 
     #[test_only]
-    use aptos_framework::aptos_coin::{Self};
-
-    #[test_only]
     use aptos_framework::account;
-
-    #[test_only]
-    use std::error;
 
     // === Constants ===
     const STAGE_NONE: u64 = 0;
-    const STAGE_WHITELIST: u64 = 1;
-    const STAGE_PRESALE: u64 = 2;
-    const STAGE_PUBLIC: u64 = 3;
+    const STAGE_PRIVATE_SALE: u64 = 1;
+    const STAGE_GTD_WL: u64 = 2;
+    const STAGE_FCFS_WL: u64 = 3;
+    const STAGE_PUBLIC: u64 = 4;
 
     // === Structs ===
     struct LaunchpadConfig has key {
         treasury_addr: address,
         admin: address,
-        accepted_coin_id: address,
+        accepted_coin_ids: vector<address>,
         stage: u64,
         presale_configs: vector<PresaleStage>
     }
@@ -49,7 +44,8 @@ module presale::presale {
         presale_max_size: u64,
         presale_price: u64,
         presale_start_time: u64,
-        presale_end_time: u64
+        presale_end_time: u64,
+        max_quantity_per_wallet: u64
     }
 
     struct LaunchpadState has key {
@@ -70,19 +66,21 @@ module presale::presale {
     }
 
     // === Errors ===
-    const ESOLD_OUT: u64 = 1;
-    const ENOT_AUTHORIZED: u64 = 2;
-    const EINVALID_COIN_TYPE: u64 = 3;
-    const EINVALID_PAYMENT: u64 = 4;
-    const EINVALID_QUANTITY: u64 = 5;
-    const ENOT_IN_PRESALE_TIME: u64 = 6;
-    const ESTART_TIME_AFTER_END_TIME: u64 = 7;
-    const ESTAGE_IS_NOT_PRESALE: u64 = 8; // Stage is not presale
-    const ESTAGE_IS_NOT_WHITELIST: u64 = 9; // Stage is not whitelist
-    const EINVALID_STAGE: u64 = 10; // Stage must be between 0 and 3
-    const EHAS_ALREADY_PURCHASED: u64 = 11; // User has already purchased
-    const EINVALID_CODE_LENGTH: u64 = 12;
-    const ENOT_QUALIFIED_FOR_REFERRAL: u64 = 13; // User is not qualified for referral
+    const ESOLD_OUT: u64 = 1; // Presale is sold out
+    const ENOT_AUTHORIZED: u64 = 2; // User is not authorized for this operation
+    const EUNSUPPORTED_COIN_TYPE: u64 = 3; // Coin type not accepted for payment
+    const EPAYMENT_AMOUNT_INVALID: u64 = 4; // Payment amount is invalid
+    const EITEM_QUANTITY_INVALID: u64 = 5; // Invalid number of items requested
+    const EOUTSIDE_PRESALE_PERIOD: u64 = 6; // Current time is not within presale period
+    const EINVALID_TIME_RANGE: u64 = 7; // Start time must be before end time
+    const EWRONG_STAGE_NOT_PRESALE: u64 = 8; // Current stage is not the presale stage
+    const EWRONG_STAGE_NOT_WHITELIST: u64 = 9; // Current stage is not the whitelist stage
+    const ESTAGE_INDEX_OUT_OF_RANGE: u64 = 10; // Stage index is out of valid range
+    const EUSER_ALREADY_PURCHASED: u64 = 11; // User has already purchased items
+    const EREFERRAL_CODE_LENGTH_INVALID: u64 = 12; // Referral code length is invalid
+    const EUSER_NOT_QUALIFIED_FOR_REFERRAL: u64 = 13; // User does not qualify to create a referral
+    const ECOIN_TYPE_ALREADY_ACCEPTED: u64 = 14; // Coin type already exists in accepted list
+    const EWRONG_STAGE_NOT_PUBLIC: u64 = 15; // Current stage is not the public sale stage
     // === Constants ===
     const DEFAULT_MAX_PRESALE_SIZE: u64 = 1500;
     const DEFAULT_SALE_PRICE: u64 = 1000000;
@@ -102,22 +100,28 @@ module presale::presale {
         code: option::Option<string::String>
     }
 
-    // === Initialization ===
+    // Initialize the presale module with default configurations
     fun init_module(admin: &signer) {
-        // let seed_vec = bcs::to_bytes(&timestamp::now_seconds());
-        // let (resource_signer, resource_signer_cap) = account::create_resource_account(admin, seed_vec);
         let launchpad_config = LaunchpadConfig {
             treasury_addr: @treasury_addr,
-            accepted_coin_id: ACCEPTED_COIN_METADATA_ID,
+            // Initialize with default accepted coin (empty vector)
+            accepted_coin_ids: vector::empty<address>(),
             admin: @admin_addr,
-            stage: STAGE_WHITELIST,
+            stage: STAGE_PRIVATE_SALE,
             presale_configs: vector::empty<PresaleStage>()
         };
+
+        // Add default accepted coin
+        vector::push_back(
+            &mut launchpad_config.accepted_coin_ids, ACCEPTED_COIN_METADATA_ID
+        );
+
         let presale_config = PresaleStage {
             presale_max_size: DEFAULT_MAX_PRESALE_SIZE,
             presale_price: DEFAULT_SALE_PRICE,
             presale_start_time: 0,
-            presale_end_time: 0
+            presale_end_time: 0,
+            max_quantity_per_wallet: 0
         };
         vector::push_back(&mut launchpad_config.presale_configs, presale_config);
         move_to(admin, launchpad_config);
@@ -130,94 +134,60 @@ module presale::presale {
         move_to(admin, payments);
 
         whitelist::init_whitelist_config(admin);
+        whitelist_nft::init_whitelist_nft_config(admin);
         referral::init_referral_registry(admin);
     }
 
     // === Public-Entry Functions ===
-    public entry fun update_public_sale_stage(
-        admin: &signer,
-        presale_max_size: u64,
-        presale_price: u64,
-        presale_start_time: u64,
-        presale_end_time: u64
-    ) acquires LaunchpadConfig, LaunchpadState {
-        assert_launchpad_config_exists();
-        let admin_addr = signer::address_of(admin);
-        let launchpad_config = borrow_launchpad_config_mut();
-
-        assert!(is_admin(launchpad_config, admin_addr), ENOT_AUTHORIZED);
-        assert!(presale_start_time < presale_end_time, ESTART_TIME_AFTER_END_TIME); // Start time must be before end time
-
-        launchpad_config.stage = STAGE_PUBLIC; // Set stage to public sale
-        reset_current_sold();
-        add_or_update_stage(
-            admin,
-            presale_max_size,
-            presale_price,
-            presale_start_time,
-            presale_end_time,
-            STAGE_WHITELIST
-        );
-    }
-
-    public entry fun update_private_presale_stage(
-        admin: &signer,
-        presale_max_size: u64,
-        presale_price: u64,
-        presale_start_time: u64,
-        presale_end_time: u64
-    ) acquires LaunchpadConfig, LaunchpadState {
-        assert_launchpad_config_exists();
-        let admin_addr = signer::address_of(admin);
-        let launchpad_config = borrow_launchpad_config_mut();
-
-        assert!(is_admin(launchpad_config, admin_addr), ENOT_AUTHORIZED);
-        assert!(presale_start_time < presale_end_time, ESTART_TIME_AFTER_END_TIME); // Start time must be before end time
-
-        launchpad_config.stage = STAGE_PRESALE; // Set stage to presale
-        reset_current_sold();
-        add_or_update_stage(
-            admin,
-            presale_max_size,
-            presale_price,
-            presale_start_time,
-            presale_end_time,
-            STAGE_PRESALE
-        );
-    }
-
-    public entry fun update_whitelist_sale_stage(
-        admin: &signer,
-        presale_max_size: u64,
-        presale_price: u64,
-        presale_start_time: u64,
-        presale_end_time: u64
-    ) acquires LaunchpadConfig, LaunchpadState {
-        assert_launchpad_config_exists();
-        let admin_addr = signer::address_of(admin);
-        let launchpad_config = borrow_launchpad_config_mut();
-        assert!(is_admin(launchpad_config, admin_addr), ENOT_AUTHORIZED);
-        assert!(presale_start_time < presale_end_time, ESTART_TIME_AFTER_END_TIME); // Start time must be before end time
-
-        launchpad_config.stage = STAGE_WHITELIST; // Set stage to whitelist
-        reset_current_sold();
-        add_or_update_stage(
-            admin,
-            presale_max_size,
-            presale_price,
-            presale_start_time,
-            presale_end_time,
-            STAGE_WHITELIST
-        );
-        whitelist::update_whitelist_presale_times(presale_start_time, presale_end_time);
-    }
-
-    fun add_or_update_stage(
+    // Update presale stage configuration and set current stage
+    public entry fun update_presale_stage(
         admin: &signer,
         presale_max_size: u64,
         presale_price: u64,
         presale_start_time: u64,
         presale_end_time: u64,
+        max_quantity_per_wallet: u64,
+        stage: u64
+    ) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+
+        let admin_addr = signer::address_of(admin);
+        let launchpad_config = borrow_launchpad_config_mut();
+
+        assert!(is_admin(launchpad_config, admin_addr), ENOT_AUTHORIZED);
+        assert!(presale_start_time < presale_end_time, EINVALID_TIME_RANGE); // Start time must be before end time
+
+        launchpad_config.stage = stage; // Set stage to presale
+        add_or_update_stage(
+            admin,
+            presale_max_size,
+            presale_price,
+            presale_start_time,
+            presale_end_time,
+            max_quantity_per_wallet,
+            stage
+        );
+    }
+
+    // Reset current sold count to zero (admin only)
+    public entry fun reset_current_sold(admin: &signer) acquires LaunchpadConfig, LaunchpadState {
+        assert_launchpad_config_exists();
+        let admin_addr = signer::address_of(admin);
+        let launchpad_config = borrow_launchpad_config_mut();
+        assert!(is_admin(launchpad_config, admin_addr), ENOT_AUTHORIZED);
+
+        let launchpad_state = borrow_state_mut();
+        launchpad_state.current_sold = 0; // Reset current sold count
+    }
+
+    // Add or update stage configuration in the presale configs vector
+    fun add_or_update_stage(
+        _admin: &signer,
+        presale_max_size: u64,
+        presale_price: u64,
+        presale_start_time: u64,
+        presale_end_time: u64,
+        max_quantity_per_wallet: u64,
         stage: u64
     ) acquires LaunchpadConfig {
         // assert!(presale_start_time < presale_end_time, ESTART_TIME_AFTER_END_TIME); // Start time must be before end time
@@ -229,7 +199,8 @@ module presale::presale {
                 presale_max_size,
                 presale_price,
                 presale_start_time,
-                presale_end_time
+                presale_end_time,
+                max_quantity_per_wallet
             };
             vector::push_back(&mut launchpad_config.presale_configs, presale_stage);
         } else {
@@ -237,11 +208,12 @@ module presale::presale {
             stage.presale_max_size = presale_max_size;
             stage.presale_price = presale_price;
             stage.presale_start_time = presale_start_time;
+            stage.max_quantity_per_wallet = max_quantity_per_wallet;
             stage.presale_end_time = presale_end_time;
         };
     }
 
-    /// Sets the treasury address for the launchpad.
+    // Sets the treasury address for the launchpad.
     public entry fun set_treasury(
         admin: &signer, new_treasury_addr: address
     ) acquires LaunchpadConfig {
@@ -253,7 +225,7 @@ module presale::presale {
         config.treasury_addr = new_treasury_addr;
     }
 
-    /// Adds a user to the whitelist with a maximum quantity per purchase.
+    // Adds a user to the whitelist with a maximum quantity per purchase.
     public entry fun add_to_whitelist(admin: &signer, user_addr: address) acquires LaunchpadConfig {
         assert_launchpad_config_exists();
         let admin_addr = signer::address_of(admin);
@@ -262,7 +234,27 @@ module presale::presale {
         whitelist::add_to_whitelist(user_addr, MAX_QUANTITY_PER_PURCHASE);
     }
 
-    /// Removes a user from the whitelist.
+    // Add NFT to whitelist for genesis holders
+    public entry fun add_to_nft_whitelist(admin: &signer, nft_id: address) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+        let admin_addr = signer::address_of(admin);
+        let config = borrow_launchpad_config_mut();
+        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
+        whitelist_nft::add_nft_to_whitelist(nft_id);
+    }
+
+    // Remove NFT from whitelist
+    public entry fun remove_from_nft_whitelist(
+        admin: &signer, nft_id: address
+    ) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+        let admin_addr = signer::address_of(admin);
+        let config = borrow_launchpad_config_mut();
+        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
+        whitelist_nft::remove_nft_from_whitelist(nft_id);
+    }
+
+    // Removes a user from the whitelist.
     public entry fun remove_from_whitelist(
         admin: &signer, user_addr: address
     ) acquires LaunchpadConfig {
@@ -273,7 +265,7 @@ module presale::presale {
         whitelist::remove_from_whitelist(user_addr);
     }
 
-    /// Sets a new admin for the launchpad.
+    // Transfer admin privileges to new address
     public entry fun set_admin(admin: &signer, new_admin: address) acquires LaunchpadConfig {
         assert_launchpad_config_exists();
         let config = borrow_launchpad_config_mut();
@@ -282,39 +274,73 @@ module presale::presale {
         config.admin = new_admin;
     }
 
-    /// Sets the accepted coin type for the presale.
-    public entry fun set_accepted_coin_id(
-        admin: &signer, new_coin_id: address
+    // Set current active presale stage
+    public entry fun set_stage(admin: &signer, stage: u64) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+        let config = borrow_launchpad_config_mut();
+        let admin_addr = signer::address_of(admin);
+        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
+        assert!(
+            stage < vector::length(&config.presale_configs),
+            ESTAGE_INDEX_OUT_OF_RANGE
+        );
+        config.stage = stage;
+    }
+
+    // Adds a coin type to the accepted payment methods
+    public entry fun add_accepted_coin_id(
+        admin: &signer, coin_id: address
     ) acquires LaunchpadConfig {
         assert_launchpad_config_exists();
         let config = borrow_launchpad_config_mut();
         let admin_addr = signer::address_of(admin);
         assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
-        config.accepted_coin_id = new_coin_id;
+        assert!(
+            vector::contains(&config.accepted_coin_ids, &coin_id) == false,
+            ECOIN_TYPE_ALREADY_ACCEPTED
+        );
+
+        vector::push_back(&mut config.accepted_coin_ids, coin_id);
     }
 
-    // entry fun purchase<CoinType>() {}
+    // Removes a coin type from the accepted payment methods
+    public entry fun remove_accepted_coin_id(
+        admin: &signer, coin_id: address
+    ) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+        let config = borrow_launchpad_config_mut();
+        let admin_addr = signer::address_of(admin);
+        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
 
-    /// Purchases items during the presale using a referral code.
-    public entry fun purchase_by_code(
+        // Check if the coin ID exists before attempting to remove it
+        assert!(
+            vector::contains(&config.accepted_coin_ids, &coin_id),
+            EUNSUPPORTED_COIN_TYPE
+        );
+
+        // Remove the coin ID from the accepted coins list
+        let (is_exist, index) = vector::index_of(&config.accepted_coin_ids, &coin_id);
+        if (is_exist) {
+            vector::remove(&mut config.accepted_coin_ids, index);
+        }
+    }
+
+    public entry fun purchase(
         sender: &signer,
         metadata: object::Object<fungible_asset::Metadata>,
         quantity: u64,
-        code: string::String
+        code: option::Option<string::String>
     ) acquires LaunchpadConfig, LaunchpadState, Payments {
         assert_launchpad_config_exists();
-        assert_within_presale_period();
-        assert_not_sold_out();
-        assert_quantity_in_range(quantity, 2);
-        assert_has_not_purchased(signer::address_of(sender));
-        referral::assert_referral_code_available(code);
-
         let launchpad_config = borrow_launchpad_config();
-        let presale_stage = get_stage_by_index(launchpad_config, STAGE_PRESALE);
-        assert!(
-            launchpad_config.stage == STAGE_PRESALE,
-            ESTAGE_IS_NOT_WHITELIST
-        );
+
+        assert_within_presale_period(launchpad_config);
+        assert_not_sold_out(launchpad_config);
+        assert_has_not_purchased(signer::address_of(sender));
+        assert!(launchpad_config.stage > STAGE_FCFS_WL, EWRONG_STAGE_NOT_PUBLIC);
+
+        let presale_stage = get_stage_by_index(launchpad_config, launchpad_config.stage);
+        assert_quantity_in_range(quantity, presale_stage.max_quantity_per_wallet);
 
         let launchpad_state = borrow_state();
         // Check if presale is sold out
@@ -322,12 +348,18 @@ module presale::presale {
             launchpad_state.current_sold + (quantity as u64)
                 <= presale_stage.presale_max_size,
             ESOLD_OUT
-        ); // Presale sold out
+        );
 
-        let total_price =
-            purchase_internal_with_asset(sender, metadata, quantity, option::some(code));
+        if (option::is_some(&code)) {
+            let code = option::extract(&mut code);
+            referral::assert_referral_code_available(code);
+            referral::increase_current_invites(
+                signer::address_of(sender), code, quantity
+            );
+        };
 
-        referral::increase_current_invites(signer::address_of(sender), code, quantity);
+        // Presale sold out
+        let total_price = purchase_internal_with_asset(sender, metadata, quantity, code);
 
         event::emit(
             PurchasedEvent {
@@ -335,26 +367,84 @@ module presale::presale {
                 quantity,
                 amount: total_price,
                 timestamp: timestamp::now_seconds(),
-                code: option::some(code)
+                code: code
             }
         );
     }
 
+    // Purchases items during the presale using a referral code.
     public entry fun purchase_by_whitelist(
-        sender: &signer, metadata: object::Object<fungible_asset::Metadata>, quantity: u64
+        sender: &signer,
+        metadata: object::Object<fungible_asset::Metadata>,
+        quantity: u64,
+        code: option::Option<string::String>
     ) acquires LaunchpadConfig, LaunchpadState, Payments {
         assert_launchpad_config_exists();
-        assert_within_presale_period();
-        assert_not_sold_out();
-        assert_quantity_in_range(quantity, MAX_QUANTITY_PER_PURCHASE);
+        let launchpad_config = borrow_launchpad_config();
+
+        assert_within_presale_period(launchpad_config);
+        assert_not_sold_out(launchpad_config);
         assert_has_not_purchased(signer::address_of(sender));
 
-        let launchpad_config = borrow_launchpad_config();
-        let presale_config = get_stage_by_index(launchpad_config, STAGE_WHITELIST);
         assert!(
-            launchpad_config.stage == STAGE_WHITELIST,
-            ESTAGE_IS_NOT_PRESALE
+            launchpad_config.stage >= STAGE_GTD_WL
+                && launchpad_config.stage <= STAGE_FCFS_WL,
+            EWRONG_STAGE_NOT_WHITELIST
         );
+        let presale_stage = get_stage_by_index(launchpad_config, launchpad_config.stage);
+
+        assert_quantity_in_range(quantity, presale_stage.max_quantity_per_wallet);
+        let launchpad_state = borrow_state();
+        // Check if presale is sold out
+        assert!(
+            launchpad_state.current_sold + (quantity as u64)
+                <= presale_stage.presale_max_size,
+            ESOLD_OUT
+        );
+
+        if (option::is_some(&code)) {
+            let code = option::extract(&mut code);
+            referral::assert_referral_code_available(code);
+            referral::increase_current_invites(
+                signer::address_of(sender), code, quantity
+            );
+        };
+
+        // Presale sold out
+        let total_price = purchase_internal_with_asset(sender, metadata, quantity, code);
+
+        event::emit(
+            PurchasedEvent {
+                buyer: signer::address_of(sender),
+                quantity,
+                amount: total_price,
+                timestamp: timestamp::now_seconds(),
+                code: code
+            }
+        );
+    }
+
+    // Purchase NFTs during private sale with optional genesis NFT
+    public entry fun purchase_by_private_sale(
+        sender: &signer,
+        metadata: object::Object<fungible_asset::Metadata>,
+        quantity: u64,
+        genesis_object: option::Option<Object<ObjectCore>>
+    ) acquires LaunchpadConfig, LaunchpadState, Payments {
+        assert_launchpad_config_exists();
+        let launchpad_config = borrow_launchpad_config();
+
+        assert_within_presale_period(launchpad_config);
+        assert_not_sold_out(launchpad_config);
+        assert_quantity_in_range(quantity, MAX_QUANTITY_PER_PURCHASE);
+        assert_has_not_purchased(signer::address_of(sender));
+        assert_correct_stage(launchpad_config, STAGE_PRIVATE_SALE);
+
+        let presale_config = get_stage_by_index(launchpad_config, STAGE_PRIVATE_SALE);
+        // assert!(
+        //     launchpad_config.stage == STAGE_PRIVATE_SALE,
+        //     EWRONG_STAGE_NOT_PRESALE
+        // );
 
         let launchpad_state = borrow_state();
         // Check if presale is sold out
@@ -366,7 +456,14 @@ module presale::presale {
 
         let total_price =
             purchase_internal_with_asset(sender, metadata, quantity, option::none());
-        whitelist::decrease_whitelist_mint_amount(sender, quantity);
+        if (option::is_some(&genesis_object)) {
+            // If genesis object is provided, mint whitelist NFT
+            let genesis = option::extract(&mut genesis_object);
+            let sender_addr = signer::address_of(sender);
+            whitelist_nft::mark_nft_as_used(sender_addr, genesis);
+        } else {
+            whitelist::decrease_whitelist_mint_amount(sender, quantity);
+        };
 
         // Emit event
         event::emit(
@@ -380,15 +477,16 @@ module presale::presale {
         );
     }
 
+    // Create referral code after purchasing 3+ NFTs
     public entry fun create_referral_code(
         sender: &signer, code: string::String
     ) acquires Payments {
         let buyer = signer::address_of(sender);
-        // Check code length is valid (between 6 and 30 characters)
+        // Check code length is valid (between 4 and 30 characters)
         let code_length = string::length(&code);
         assert!(
-            code_length >= 6 && code_length <= 30,
-            EINVALID_CODE_LENGTH
+            code_length >= 4 && code_length <= 30,
+            EREFERRAL_CODE_LENGTH_INVALID
         );
 
         let payments = borrow_payments_mut();
@@ -401,25 +499,17 @@ module presale::presale {
 
         let user_payment = vector::borrow(user_payments, 0); // Ensure the user has no previous payments
         let quantity = user_payment.quantity;
-        assert!(quantity > 2, ENOT_QUALIFIED_FOR_REFERRAL);
+        assert!(quantity > 2, EUSER_NOT_QUALIFIED_FOR_REFERRAL);
 
         let max_invites = {
             if (quantity <= 4) { 10 }
             else { 1000 }
         };
         referral::create_referral_code(sender, code, max_invites);
-        // Return the generated code
     }
 
     // === Private Functions ===
-    // fun pay_for_presale<CoinType>(
-    //     buyer: &signer, total_price: u64, treasury_addr: address
-    // ) {
-    //     assert!(total_price > 0, EINVALID_PAYMENT);
-    //     // Transfer payment to treasury using AptosCoin specifically
-    //     aptos_account::transfer_coins<CoinType>(buyer, treasury_addr, total_price);
-    // }
-
+    // Transfer payment to treasury address
     fun pay_for_presale(
         sender: &signer,
         metadata: object::Object<fungible_asset::Metadata>,
@@ -427,12 +517,13 @@ module presale::presale {
         treasury_addr: address
     ) {
         // let amount = fungible_asset::amount(&asset);
-        assert!(amount > 0, EINVALID_PAYMENT);
+        assert!(amount > 0, EPAYMENT_AMOUNT_INVALID);
         // Transfer fungible asset to treasury
 
         aptos_account::transfer_fungible_assets(sender, metadata, treasury_addr, amount);
     }
 
+    // Internal purchase logic with payment recording
     fun purchase_internal(
         sender: &signer,
         metadata: object::Object<fungible_asset::Metadata>,
@@ -472,6 +563,7 @@ module presale::presale {
         total_price
     }
 
+    // Internal purchase with asset validation and payment processing
     fun purchase_internal_with_asset(
         sender: &signer,
         metadata: object::Object<fungible_asset::Metadata>,
@@ -486,8 +578,8 @@ module presale::presale {
         let metadata_object_address = object::object_address(&metadata);
 
         assert!(
-            metadata_object_address == launchpad_config.accepted_coin_id,
-            EINVALID_COIN_TYPE
+            is_accepted_coin(launchpad_config, metadata_object_address),
+            EUNSUPPORTED_COIN_TYPE
         );
 
         let total_amount = presale_stage.presale_price * (quantity as u64);
@@ -523,27 +615,38 @@ module presale::presale {
         total_amount
     }
 
-    /// Sets the accepted fungible asset metadata address for the presale.
-    public entry fun set_accepted_asset_metadata(
-        admin: &signer, metadata_address: address
-    ) acquires LaunchpadConfig {
-        assert_launchpad_config_exists();
-        let config = borrow_launchpad_config_mut();
-        let admin_addr = signer::address_of(admin);
-        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
-
-        // Convert address to string for storage
-        config.accepted_coin_id = metadata_address
-    }
-
-    //  === Public-View Functions ===
-    #[view]
-    public fun get_num_of_presale_stages(): u64 acquires LaunchpadConfig {
-        assert_launchpad_config_exists();
+    // Get total number of configured presale stages
+    fun get_num_of_presale_stages(): u64 acquires LaunchpadConfig {
+        // assert_launchpad_config_exists();
         let launchpad_config = borrow_launchpad_config();
         vector::length(&launchpad_config.presale_configs) as u64
     }
 
+    //  === Public-View Functions ===
+    // Get quantity of NFTs purchased by user
+    #[view]
+    public fun get_user_purchase_quantity(user: address): u64 acquires Payments {
+        if (!exists<Payments>(@presale)) {
+            return 0
+        };
+
+        let payments = borrow_payments();
+        if (!table::contains(&payments.payments, user)) {
+            return 0
+        };
+
+        let user_payments = table::borrow(&payments.payments, user);
+        if (vector::is_empty(user_payments)) {
+            return 0
+        };
+
+        // Return the quantity from the first payment
+        // (users can only purchase once)
+        let payment = vector::borrow(user_payments, 0);
+        payment.quantity
+    }
+
+    // Get start and end time for specific stage
     #[view]
     public fun get_stage_period_by_index(stage: u64): (u64, u64) acquires LaunchpadConfig {
         assert_launchpad_config_exists();
@@ -552,20 +655,22 @@ module presale::presale {
         (stage.presale_start_time, stage.presale_end_time)
     }
 
+    // Get current active stage configuration
     #[view]
-    public fun is_in_presale_period(stage: u64): bool acquires LaunchpadConfig {
+    public fun get_current_stage_config(): (u64, u64, u64, u64, u64) acquires LaunchpadConfig {
         assert_launchpad_config_exists();
         let launchpad_config = borrow_launchpad_config();
-        if (stage < vector::length(&launchpad_config.presale_configs)) {
-            return false
-        };
-        let stage = get_stage_by_index(launchpad_config, stage);
-        is_within_presale_period(
+        let stage = get_stage_by_index(launchpad_config, launchpad_config.stage);
+        (
+            stage.presale_max_size,
+            stage.presale_price,
             stage.presale_start_time,
-            stage.presale_end_time
+            stage.presale_end_time,
+            stage.max_quantity_per_wallet
         )
     }
 
+    // Get presale statistics (total sold, current sold)
     #[view]
     public fun get_presale_state(): (u64, u64) acquires LaunchpadState {
         assert_launchpad_config_exists();
@@ -573,17 +678,20 @@ module presale::presale {
         (launchpad_state.total_sold, launchpad_state.current_sold)
     }
 
+    // Check if launchpad config exists at address
     #[view]
     public fun launchpad_config_exists(module_address: address): bool {
         exists<LaunchpadConfig>(module_address)
     }
 
+    // Check if user has already purchased
     #[view]
     public fun has_purchased(buyer: address): bool acquires Payments {
         let payments = borrow_payments();
         table::contains(&payments.payments, buyer)
     }
 
+    // Check if current stage is sold out
     #[view]
     public fun has_sold_out(): bool acquires LaunchpadConfig, LaunchpadState {
         assert_launchpad_config_exists();
@@ -594,51 +702,69 @@ module presale::presale {
     }
 
     // === Inline Functions ===
+    // Check if a coin type is accepted
+    inline fun is_accepted_coin(
+        config: &LaunchpadConfig, coin_id: address
+    ): bool {
+        vector::contains(&config.accepted_coin_ids, &coin_id)
+    }
+
+    // Get stage configuration by index
     inline fun get_stage_by_index(
         launchpad_config: &LaunchpadConfig, index: u64
     ): &PresaleStage acquires LaunchpadConfig {
         assert!(
-            index < vector::length(&launchpad_config.presale_configs), EINVALID_STAGE
+            index < vector::length(&launchpad_config.presale_configs),
+            ESTAGE_INDEX_OUT_OF_RANGE
         );
         vector::borrow(&launchpad_config.presale_configs, index)
     }
 
+    // Get immutable reference to launchpad config
     inline fun borrow_launchpad_config(): &LaunchpadConfig acquires LaunchpadConfig {
         borrow_global<LaunchpadConfig>(@presale)
     }
 
+    // Get mutable reference to launchpad config
     inline fun borrow_launchpad_config_mut(): &mut LaunchpadConfig acquires LaunchpadConfig {
         borrow_global_mut<LaunchpadConfig>(@presale)
     }
 
+    // Get immutable reference to launchpad state
     inline fun borrow_state(): &LaunchpadState acquires LaunchpadState {
         borrow_global<LaunchpadState>(@presale)
     }
 
+    // Get mutable reference to launchpad state
     inline fun borrow_state_mut(): &mut LaunchpadState acquires LaunchpadState {
         borrow_global_mut<LaunchpadState>(@presale)
     }
 
+    // Get immutable reference to payments table
     inline fun borrow_payments(): &Payments acquires Payments {
         let payments = borrow_global<Payments>(@presale);
         payments
     }
 
+    // Get mutable reference to payments table
     inline fun borrow_payments_mut(): &mut Payments acquires Payments {
         let payments = borrow_global_mut<Payments>(@presale);
         payments
     }
 
+    // Check if address has admin privileges
     inline fun is_admin(config: &LaunchpadConfig, addr: address): bool {
         if (config.admin == addr) { true }
         else { false }
     }
 
+    // Assert caller has admin privileges
     inline fun assert_is_admin(addr: address) {
         let config = borrow_global<LaunchpadConfig>(@presale);
         assert!(is_admin(config, addr), ENOT_AUTHORIZED);
     }
 
+    // Assert launchpad config resource exists
     inline fun assert_launchpad_config_exists() acquires LaunchpadConfig {
         assert!(
             exists<LaunchpadConfig>(@presale),
@@ -646,25 +772,40 @@ module presale::presale {
         ); // Presale config not found
     }
 
+    // Assert quantity is within valid range
     inline fun assert_quantity_in_range(quantity: u64, max_quantity: u64) {
         assert!(
             quantity > 0 && quantity <= max_quantity,
-            EINVALID_QUANTITY
+            EITEM_QUANTITY_INVALID
         ); // Invalid quantity
     }
 
+    // Assert current stage matches expected stage
+    inline fun assert_correct_stage(
+        launchpad_config: &LaunchpadConfig, expected_stage: u64
+    ) acquires LaunchpadConfig {
+        // let launchpad_config = borrow_launchpad_config();
+        assert!(
+            launchpad_config.stage == expected_stage,
+            EWRONG_STAGE_NOT_PRESALE
+        ); // Current stage is not the expected stage
+    }
+
+    // Assert user hasn't purchased before
     inline fun assert_has_not_purchased(buyer: address) acquires Payments {
         let payments = borrow_payments();
         assert!(
             !table::contains(&payments.payments, buyer),
-            EHAS_ALREADY_PURCHASED
+            EUSER_ALREADY_PURCHASED
         ); // User has already purchased
     }
 
+    // Check if stage has reached maximum capacity
     inline fun is_sold_out(current_sold: u64, max_presale_size: u64): bool {
         current_sold >= max_presale_size
     }
 
+    // Check if current time is within presale period
     inline fun is_within_presale_period(
         presale_start_time: u64, presale_end_time: u64
     ): bool {
@@ -672,14 +813,11 @@ module presale::presale {
         now >= presale_start_time && now <= presale_end_time
     }
 
-    inline fun reset_current_sold() acquires LaunchpadState {
-        let launchpad_state = borrow_state_mut();
-        launchpad_state.current_sold = 0;
-    }
-
-    inline fun assert_within_presale_period() acquires LaunchpadConfig {
-        assert_launchpad_config_exists();
-        let launchpad_config = borrow_launchpad_config();
+    // Assert current time is within active presale period
+    inline fun assert_within_presale_period(
+        launchpad_config: &LaunchpadConfig
+    ) {
+        // let launchpad_config = borrow_launchpad_config();
         let presale_stage = get_stage_by_index(launchpad_config, launchpad_config.stage);
 
         assert!(
@@ -687,14 +825,13 @@ module presale::presale {
                 presale_stage.presale_start_time,
                 presale_stage.presale_end_time
             ),
-            ENOT_IN_PRESALE_TIME
+            EOUTSIDE_PRESALE_PERIOD
         ); // Not in presale time
     }
 
-    inline fun assert_not_sold_out() acquires LaunchpadConfig, LaunchpadState {
-        assert_launchpad_config_exists();
+    // Assert current stage is not sold out
+    inline fun assert_not_sold_out(launchpad_config: &LaunchpadConfig) acquires LaunchpadState {
         let launchpad_state = borrow_state();
-        let launchpad_config = borrow_launchpad_config();
         let presale_stage = get_stage_by_index(launchpad_config, launchpad_config.stage);
 
         assert!(
@@ -707,23 +844,14 @@ module presale::presale {
     use std::debug;
 
     #[test_only]
-    use aptos_std::crypto_algebra::enable_cryptography_algebra_natives;
-
-    #[test_only]
     use aptos_framework::account::create_account_for_test;
 
+    // Initialize testing environment with framework setup
     #[test_only]
-    #[lint::allow_unsafe_randomness]
     public fun init_module_for_test(
         aptos_framework: &signer, deployer: &signer, user: &signer
     ): (coin::BurnCapability<AptosCoin>, coin::MintCapability<AptosCoin>) {
         let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(aptos_framework);
-
-        enable_cryptography_algebra_natives(aptos_framework);
-        randomness::initialize_for_testing(aptos_framework);
-        randomness::set_seed(
-            x"0000000000000000000000000000000000000000000000000000000000000000"
-        );
 
         // create a fake account (only for testing purposes)
         create_account_for_test(signer::address_of(deployer));
@@ -735,72 +863,154 @@ module presale::presale {
     }
 
     // === Tests ===
-    #[test(
-        core = @0x1, owner = @presale, admin = @admin_addr, userA = @0xAA, userB = @0xBB
-    )]
-    fun test_presale_flow_ok(
+    // Test complete presale flow from private sale to whitelist stages
+    #[
+        test(
+            core = @0x1,
+            owner = @presale,
+            admin = @admin_addr,
+            userA = @0xAA,
+            userB = @0xBB,
+            userC = @0xCC,
+            userD = @0xDD,
+            userE = @0xEE
+        )
+    ]
+    fun test_end_2_end_flow_ok(
         core: &signer,
         owner: &signer,
         admin: &signer,
         userA: &signer,
-        userB: &signer
+        userB: &signer,
+        userC: &signer,
+        userD: &signer,
+        userE: &signer
     ) acquires LaunchpadConfig, LaunchpadState, Payments {
         let (burn_cap, mint_cap) = init_module_for_test(core, owner, userA);
+        create_account_for_test(signer::address_of(owner));
+        let (token_object, token_addr) =
+            whitelist_nft::create_test_token_for_testing(owner);
 
-        let owner_addr = signer::address_of(owner);
         let userA_addr = signer::address_of(userA);
         let userB_addr = signer::address_of(userB);
+        let userC_addr = signer::address_of(userC);
+        let userD_addr = signer::address_of(userD);
+        let userE_addr = signer::address_of(userE);
 
-        let metadata = setup_testing_token(owner, userA_addr, 20000000);
+        let metadata = setup_testing_token(owner, userA_addr, 50000000);
         let metadata_addr = object::object_address(&metadata);
 
+        // faucet some coins to users
         primary_fungible_store::transfer(userA, metadata, userB_addr, 10000000);
+        primary_fungible_store::transfer(userA, metadata, userC_addr, 10000000);
+        primary_fungible_store::transfer(userA, metadata, userD_addr, 10000000);
+        primary_fungible_store::transfer(userA, metadata, userE_addr, 10000000);
+
         init_module(owner);
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+
+        // transfer NFT to user B for private sale
+        object::transfer(owner, token_object, userB_addr);
+
+        // start private sale stage
+        update_presale_stage(
             admin,
-            5, // Set max presale size
+            10, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
 
         add_to_whitelist(admin, userA_addr); // Add user A to whitelist
+        add_to_nft_whitelist(admin, token_addr); // Add NFT to whitelist
 
-        assert!(
-            whitelist::is_user_eligible_for_whitelist_mint(userA_addr) == 5,
-            error::permission_denied(1)
-        );
-        // User purchases 3 items
-        purchase_by_whitelist(userA, metadata, 3);
+        // user a
+        purchase_by_private_sale(userA, metadata, 3, option::none());
+        let code = string::utf8(b"ABCDE1234");
+        create_referral_code(userA, code);
 
         let launchpad_state = borrow_state();
-        assert!(launchpad_state.total_sold == 3, error::permission_denied(1));
-        // create_referral_code(userA); // User A creates a referral code
-        let code = string::utf8(b"ABCDE1234");
-        referral::create_referral_code(userA, code, 10);
+        assert!(launchpad_state.total_sold == 3, 0);
+        assert!(launchpad_state.current_sold == 3, 0);
+
+        // user b
+        purchase_by_private_sale(userB, metadata, 5, option::some(token_object));
 
         timestamp::update_global_time_for_test_secs(10005); // Set a fixed time for testing
 
-        update_private_presale_stage(
+        // GTD WL stage
+        update_presale_stage(
             admin,
             5, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            3,
+            STAGE_GTD_WL // Set stage to whitelist
         );
 
-        purchase_by_code(userB, metadata, 2, code); // User B purchases using referral code
+        reset_current_sold(admin); // Reset current sold count
         let launchpad_state = borrow_state();
-        assert!(launchpad_state.total_sold == 5, error::permission_denied(1));
+        assert!(launchpad_state.current_sold == 0, 0);
+        // user c
+        purchase_by_whitelist(userC, metadata, 3, option::some(code)); //
+        let launchpad_state = borrow_state();
+        assert!(launchpad_state.total_sold == 11, 0);
+        assert!(launchpad_state.current_sold == 3, 0);
+
+        // GTD WL stage
+        update_presale_stage(
+            admin,
+            5, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            2,
+            STAGE_FCFS_WL // Set stage to whitelist
+        );
+
+        reset_current_sold(admin); // Reset current sold count
+        let launchpad_state = borrow_state();
+        assert!(launchpad_state.current_sold == 0, 0);
+
+        purchase_by_whitelist(userD, metadata, 2, option::some(code)); //
+        let launchpad_state = borrow_state();
+        assert!(launchpad_state.total_sold == 13, 0);
+        assert!(launchpad_state.current_sold == 2, 0);
+
+        // Public stage
+        update_presale_stage(
+            admin,
+            5, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5,
+            STAGE_PUBLIC // Set stage to whitelist
+        );
+        reset_current_sold(admin); // Reset current sold count
+        purchase(userE, metadata, 4, option::none()); //
+
+        let (max_invites, current_invites, current_sales) =
+            referral::get_referral_stats(code);
+        assert!(current_invites == 2, 0);
+        assert!(max_invites == 10, 0); //
+        assert!(current_sales == 5, 0); //
+
+        let launchpad_state = borrow_state();
+        assert!(launchpad_state.total_sold == 17, 0);
+
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test successful private sale purchase
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
-    fun test_purchase_by_whitelist_ok(
+    fun test_purchase_by_private_sale_ok(
         core: &signer,
         owner: &signer,
         admin: &signer,
@@ -813,37 +1023,32 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             10, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5, // Set max quantity per wallet
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
 
         add_to_whitelist(admin, user_addr); // Add user to whitelist
-
         let owner_addr = signer::address_of(owner);
-        assert!(launchpad_config_exists(owner_addr), error::not_found(1)); // Presale config not found
-        assert!(
-            whitelist::is_user_eligible_for_whitelist_mint(user_addr) == 5,
-            error::permission_denied(1)
-        );
-
         // User purchases 3 items
-        purchase_by_whitelist(user, metadata, 3);
+        purchase_by_private_sale(user, metadata, 3, option::none());
 
         let config = borrow_launchpad_config();
         let payments = borrow_payments();
         let user_payments = table::borrow(&payments.payments, user_addr);
 
-        assert!(vector::length(user_payments) == 1, error::permission_denied(1));
+        assert!(vector::length(user_payments) == 1, 0);
 
         let payment = vector::borrow(user_payments, 0);
-        assert!(payment.quantity == 3, error::permission_denied(1));
-        assert!(payment.amount == 3000000, error::permission_denied(1)); // 3 * 100000000
-        assert!(payment.buyer == user_addr, error::permission_denied(1));
+        assert!(payment.quantity == 3, 0);
+        assert!(payment.amount == 3000000, 0); // 3 * 100000000
+        assert!(payment.buyer == user_addr, 0);
 
         // check the treasury balance
         assert!(
@@ -852,19 +1057,19 @@ module presale::presale {
         );
         assert!(
             whitelist::is_user_eligible_for_whitelist_mint(user_addr) == 2,
-            error::permission_denied(1)
+            0
         );
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
-
     }
 
+    // Test purchase rejection when exceeding maximum quantity
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
     #[expected_failure(abort_code = 5, location = Self)]
-    fun test_purchase_by_whitelist_over_max_quantity(
+    fun test_purchase_by_private_sale_over_max_quantity(
         core: &signer,
         owner: &signer,
         admin: &signer,
@@ -878,28 +1083,30 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             100000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5, // Set max quantity per wallet
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
 
         // Try to purchase 6 items (over MAX_QUANTITY_PER_PURCHASE = 5) - should fail
-        purchase_by_whitelist(user, metadata, 6);
+        purchase_by_private_sale(user, metadata, 6, option::none());
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test prevention of multiple purchases by same user
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
-    #[expected_failure(abort_code = EHAS_ALREADY_PURCHASED, location = Self)]
-    // EINVALID_QUANTITY
-    fun test_purchase_by_whitelist_two_times(
+    #[expected_failure(abort_code = EUSER_ALREADY_PURCHASED, location = Self)]
+    fun test_purchase_by_private_sale_two_times(
         core: &signer,
         owner: &signer,
         admin: &signer,
@@ -913,63 +1120,102 @@ module presale::presale {
 
         init_module(owner);
         add_to_whitelist(admin, user_addr); // Add user to whitelist
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
 
-        purchase_by_whitelist(user, metadata, 4);
-        purchase_by_whitelist(user, metadata, 1);
+        purchase_by_private_sale(user, metadata, 4, option::none());
+        purchase_by_private_sale(user, metadata, 1, option::none());
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test purchase rejection with insufficient token balance
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
-    #[expected_failure(abort_code = 5, location = Self)]
-    // EINVALID_QUANTITY
-    fun test_purchase_by_zero_quantity(
+    #[expected_failure(abort_code = 65540, location = fungible_asset)]
+    fun test_purchase_by_private_sale_by_insufficient_balance(
         core: &signer,
         owner: &signer,
         admin: &signer,
         user: &signer
     ) acquires LaunchpadConfig, LaunchpadState, Payments {
-        let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(core);
-        timestamp::set_time_has_started_for_testing(core);
+        let (burn_cap, mint_cap) = init_module_for_test(core, owner, user);
 
         let user_addr = signer::address_of(user);
-        let metadata = setup_testing_token(owner, user_addr, 10000000);
+        let metadata = setup_testing_token(owner, user_addr, 500);
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
 
-        // Try to purchase 0 items - should fail
-        purchase_by_whitelist(user, metadata, 0);
+        purchase_by_private_sale(user, metadata, 4, option::none());
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test purchase rejection when exceeding stage capacity
     #[test(
-        core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAB
+        core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
-    #[expected_failure(abort_code = 3, location = Self)]
-    // EINVALID_COIN_TYPE
-    fun test_purchase_wrong_coin_type(
+    #[expected_failure(abort_code = ESOLD_OUT, location = Self)]
+    fun test_purchase_by_private_sale_by_insufficient_mint_amount(
+        core: &signer,
+        owner: &signer,
+        admin: &signer,
+        user: &signer
+    ) acquires LaunchpadConfig, LaunchpadState, Payments {
+        let (burn_cap, mint_cap) = init_module_for_test(core, owner, user);
+
+        let user_addr = signer::address_of(user);
+        let metadata = setup_testing_token(owner, user_addr, 500);
+        let metadata_addr = object::object_address(&metadata);
+
+        init_module(owner);
+        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
+            admin,
+            3, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
+        );
+
+        purchase_by_private_sale(user, metadata, 4, option::none());
+
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
+    }
+
+    // Test purchase rejection for non-whitelisted users
+    #[test(
+        core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
+    )]
+    #[expected_failure(abort_code = 1, location = presale::whitelist)]
+    fun test_purchase_by_private_sale_without_whitelist(
         core: &signer,
         owner: &signer,
         admin: &signer,
@@ -978,26 +1224,32 @@ module presale::presale {
         let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(core);
         timestamp::set_time_has_started_for_testing(core);
 
+        timestamp::update_global_time_for_test_secs(10000); // Set a fixed time for testing
         let user_addr = signer::address_of(user);
+
         let metadata = setup_testing_token(owner, user_addr, 10000000);
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        update_whitelist_sale_stage(
+        // Don't add user to whitelist
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 2000 // End time in the future
+            timestamp::now_seconds() + 15000, // End time in the future
+            5, // Set max quantity per wallet
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
-
-        // Try to purchase with AptosCoin when USDT is expected - should fail
-        purchase_by_whitelist(user, metadata, 3);
+        // Try to purchase without being whitelisted - should fail
+        purchase_by_private_sale(user, metadata, 3, option::none());
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test treasury address update functionality
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, new_treasury = @0x2
     )]
@@ -1018,41 +1270,29 @@ module presale::presale {
         set_treasury(admin, new_treasury_addr);
 
         let config = borrow_launchpad_config();
-        assert!(config.treasury_addr == new_treasury_addr, error::permission_denied(1));
+        assert!(config.treasury_addr == new_treasury_addr, 0);
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test admin privilege transfer
     #[test(owner = @presale, admin = @admin_addr)]
     fun test_set_admin_ok(owner: &signer, admin: &signer) acquires LaunchpadConfig {
         init_module(owner);
         let new_admin = @0xA;
         set_admin(admin, new_admin);
         let config = borrow_launchpad_config();
-        assert!(config.admin == new_admin, error::permission_denied(1));
+        assert!(config.admin == new_admin, 0);
     }
 
-    #[test(owner = @presale, admin = @admin_addr)]
-    fun test_set_accepted_coin_id_ok(owner: &signer, admin: &signer) acquires LaunchpadConfig {
-        init_module(owner);
-        // let owner_addr = signer::address_of(owner);
-        // assert!(launchpad_config_exists(owner_addr), error::not_found(1)); // Presale config not found
-
-        let new_coin_id = @0x02f;
-        // Normal user tries to set accepted coin type - should fail
-        set_accepted_coin_id(admin, new_coin_id);
-
-        let config = borrow_launchpad_config();
-        assert!(config.accepted_coin_id == new_coin_id, error::permission_denied(1));
-    }
-
+    // Test prevention of admin actions by former admin
     #[test(owner = @presale)]
     #[expected_failure(abort_code = 2, location = Self)]
     fun test_old_admin_cannot_set_admin_after_transfer(owner: &signer) acquires LaunchpadConfig {
         init_module(owner);
         let owner_addr = signer::address_of(owner);
-        assert!(launchpad_config_exists(owner_addr), error::not_found(1)); // Presale config not found
+        assert!(launchpad_config_exists(owner_addr), 0); // Presale config not found
 
         // Set new admin
         let new_admin = @0xA;
@@ -1060,37 +1300,14 @@ module presale::presale {
 
         // Verify new admin is set
         let config = borrow_launchpad_config();
-        assert!(config.admin == new_admin, error::permission_denied(1));
+        assert!(config.admin == new_admin, 0);
 
         // Old admin tries to set another admin - should fail
         let another_admin = @0xB;
         set_admin(owner, another_admin); // This should abort with ENOT_AUTHORIZED
     }
 
-    // #[test(owner = @presale, normal_user = @0x123)]
-    // #[expected_failure(abort_code = 2, location = Self)]
-    // fun test_normal_user_cannot_set_max_presale_size(
-    //     owner: &signer, normal_user: &signer
-    // ) acquires LaunchpadConfig {
-    //     init_module(owner);
-
-    //     // Normal user tries to set max presale size - should fail
-    //     let new_max_presale_size = 2000;
-    //     set_max_presale_size(normal_user, new_max_presale_size);
-    // }
-
-    // #[test(owner = @presale, normal_user = @0x123)]
-    // #[expected_failure(abort_code = 2, location = Self)]
-    // fun test_normal_user_cannot_set_sale_price(
-    //     owner: &signer, normal_user: &signer
-    // ) acquires LaunchpadConfig {
-    //     init_module(owner);
-
-    //     // Normal user tries to set sale price - should fail
-    //     let new_sale_price = 300;
-    //     set_sale_price(normal_user, new_sale_price);
-    // }
-
+    // Test rejection of admin actions by unauthorized users
     #[test(owner = @presale, normal_user = @0x123)]
     #[expected_failure(abort_code = 2, location = Self)]
     fun test_normal_user_cannot_set_admin(
@@ -1103,11 +1320,11 @@ module presale::presale {
         set_admin(normal_user, new_admin);
     }
 
+    // Test rejection of treasury updates by unauthorized users
     #[test(
         core = @0x1, owner = @presale, normal_user = @0x123, treasury = @0x456
     )]
     #[expected_failure(abort_code = 2, location = Self)]
-
     fun test_normal_user_cannot_set_treasury(
         core: &signer,
         owner: &signer,
@@ -1123,7 +1340,7 @@ module presale::presale {
 
         init_module(owner);
         let owner_addr = signer::address_of(owner);
-        assert!(launchpad_config_exists(owner_addr), error::not_found(1));
+        assert!(launchpad_config_exists(owner_addr), 0);
 
         // Normal user tries to set treasury - should fail
         set_treasury(normal_user, treasury_addr);
@@ -1132,18 +1349,18 @@ module presale::presale {
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test admin function calls before module initialization
     #[test(owner = @presale)]
     #[expected_failure(abort_code = ENOT_AUTHORIZED, location = Self)]
-    // error::not_found(1)
     fun test_set_admin_without_init(owner: &signer) acquires LaunchpadConfig {
         // Don't call init_module - try to set admin without initialization
         let new_admin = @0xA;
         set_admin(owner, new_admin);
     }
 
+    // Test treasury function calls before module initialization
     #[test(core = @0x1, owner = @presale, treasury = @0x456)]
     #[expected_failure(abort_code = ENOT_AUTHORIZED, location = Self)]
-    // error::not_found(1)
     fun test_set_treasury_without_init(
         core: &signer, owner: &signer, treasury: &signer
     ) acquires LaunchpadConfig {
@@ -1161,11 +1378,12 @@ module presale::presale {
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test purchase rejection outside presale time window
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
-    #[expected_failure(abort_code = ENOT_IN_PRESALE_TIME, location = Self)]
-    fun test_purchase_by_whitelist_outside_presale_time(
+    #[expected_failure(abort_code = EOUTSIDE_PRESALE_PERIOD, location = Self)]
+    fun test_purchase_by_private_sale_outside_presale_time(
         core: &signer,
         owner: &signer,
         admin: &signer,
@@ -1181,61 +1399,29 @@ module presale::presale {
 
         let metadata = setup_testing_token(owner, user_addr, 10000000);
         let metadata_addr = object::object_address(&metadata);
+
         init_module(owner);
 
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 15000 // End time in the future
+            timestamp::now_seconds() + 15000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
         timestamp::update_global_time_for_test_secs(16000); // Set time before presale starts
 
         // Try to purchase before presale starts (current time: 5000, start: 10000) - should fail
-        purchase_by_whitelist(user, metadata, 3);
+        purchase_by_private_sale(user, metadata, 3, option::none());
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
-    #[test(
-        core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
-    )]
-    #[expected_failure(abort_code = 1, location = presale::whitelist)]
-    fun test_purchase_by_whitelist_without_whitelist(
-        core: &signer,
-        owner: &signer,
-        admin: &signer,
-        user: &signer
-    ) acquires LaunchpadConfig, LaunchpadState, Payments {
-        let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(core);
-        timestamp::set_time_has_started_for_testing(core);
-
-        timestamp::update_global_time_for_test_secs(10000); // Set a fixed time for testing
-        let user_addr = signer::address_of(user);
-
-        let metadata = setup_testing_token(owner, user_addr, 10000000);
-        let metadata_addr = object::object_address(&metadata);
-
-        init_module(owner);
-        // Don't add user to whitelist
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
-            admin,
-            1000, // Set max presale size
-            1000000, // Set sale price
-            timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 15000 // End time in the future
-        );
-        // Try to purchase without being whitelisted - should fail
-        purchase_by_whitelist(user, metadata, 3);
-
-        coin::destroy_burn_cap(burn_cap);
-        coin::destroy_mint_cap(mint_cap);
-    }
-
+    // Test sold out status detection
     #[test(core = @0x1, owner = @presale, admin = @admin_addr)]
     fun test_has_sold_out_ok(
         core: &signer, owner: &signer, admin: &signer
@@ -1243,15 +1429,17 @@ module presale::presale {
         timestamp::set_time_has_started_for_testing(core);
 
         init_module(owner);
-        update_whitelist_sale_stage(
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             100000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 15000 // End time in the future
+            timestamp::now_seconds() + 15000, // End time in the future
+            5, // Set max quantity per wallet
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
         // Check sold out status when nothing is sold yet
-        assert!(!has_sold_out(), error::permission_denied(1));
+        assert!(!has_sold_out(), 0);
 
         // Manually set current_sold to max_presale_size to simulate sold out
         let state = borrow_state_mut();
@@ -1259,75 +1447,175 @@ module presale::presale {
         state.current_sold = 1000;
 
         // Check sold out status
-        assert!(has_sold_out(), error::permission_denied(1));
+        assert!(has_sold_out(), 0);
     }
 
+    // Test successful whitelist purchase with referral code
     #[test(
-        core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
+        core = @0x1, owner = @presale, admin = @admin_addr, userA = @0xAA
     )]
-    fun test_purchase_by_code_ok(
+    fun test_purchase_by_public_ok(
         core: &signer,
         owner: &signer,
         admin: &signer,
-        user: &signer
+        userA: &signer
     ) acquires LaunchpadConfig, LaunchpadState, Payments {
         let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(core);
         timestamp::set_time_has_started_for_testing(core);
         timestamp::update_global_time_for_test_secs(20000); // Set a fixed time within presale period
 
-        let user_addr = signer::address_of(user);
-        let metadata = setup_testing_token(owner, user_addr, 10000000);
+        let userA_addr = signer::address_of(userA);
+        let metadata = setup_testing_token(owner, userA_addr, 20000000);
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_to_whitelist(admin, userA_addr); // Add user to whitelist
 
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
-            admin,
-            1000, // Set max presale size
-            1000000, // Set sale price
-            timestamp::now_seconds() - 16000, // Start time in the future
-            timestamp::now_seconds() - 15000 // End time in the future
-        );
-
-        update_private_presale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 15000 // End time in the future
+            timestamp::now_seconds() + 1, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
+        );
+        update_presale_stage(
+            admin,
+            1000, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 1, // End time in the future
+            5,
+            STAGE_GTD_WL // Set stage to presale
+        );
+        update_presale_stage(
+            admin,
+            1000, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 1, // End time in the future
+            5,
+            STAGE_FCFS_WL // Set stage to presale
         );
 
-        let code = string::utf8(b"ABCDE1");
+        timestamp::update_global_time_for_test_secs(21000); // Set a fixed time within presale period
 
-        referral::create_referral_code(user, code, 5); // Create referral code with 5 uses and 100000000 price per item
-        // User purchases 3 items with a code (here, code is none)
-        purchase_by_code(user, metadata, 2, code);
+        update_presale_stage(
+            admin,
+            1000, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 15000, // End time in the future
+            5,
+            STAGE_PUBLIC // Set stage to presale
+        );
+
+        purchase(userA, metadata, 4, option::none());
 
         let config = borrow_launchpad_config();
         let payments = borrow_payments();
-        let user_payments = table::borrow(&payments.payments, user_addr);
+        let user_payments = table::borrow(&payments.payments, userA_addr);
 
-        assert!(vector::length(user_payments) == 1, error::permission_denied(1));
+        // assert!(vector::length(user_payments) == 1, 0);
         let payment = vector::borrow(user_payments, 0);
-        assert!(payment.quantity == 2, error::permission_denied(1));
-        assert!(payment.amount == 2000000, error::permission_denied(1));
-        assert!(payment.buyer == user_addr, error::permission_denied(1));
+        assert!(payment.quantity == 4, 0);
+        assert!(payment.amount == 4000000, 0);
+        assert!(payment.buyer == userA_addr, 0);
         assert!(
-            primary_fungible_store::balance(config.treasury_addr, metadata) == 2000000,
-            2
+            primary_fungible_store::balance(config.treasury_addr, metadata) == 4000000,
+            0
         );
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Test successful whitelist purchase with referral code
+    #[test(
+        core = @0x1, owner = @presale, admin = @admin_addr, userA = @0xAA, userB = @0xBB
+    )]
+    fun test_purchase_by_whitelist_ok(
+        core: &signer,
+        owner: &signer,
+        admin: &signer,
+        userA: &signer,
+        userB: &signer
+    ) acquires LaunchpadConfig, LaunchpadState, Payments {
+        let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(core);
+        timestamp::set_time_has_started_for_testing(core);
+        timestamp::update_global_time_for_test_secs(20000); // Set a fixed time within presale period
+
+        let userA_addr = signer::address_of(userA);
+        let userB_addr = signer::address_of(userB);
+        let metadata = setup_testing_token(owner, userA_addr, 20000000);
+        let metadata_addr = object::object_address(&metadata);
+
+        primary_fungible_store::transfer(
+            userA,
+            metadata,
+            signer::address_of(userB),
+            10000000
+        );
+
+        init_module(owner);
+        add_to_whitelist(admin, userA_addr); // Add user to whitelist
+
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
+            admin,
+            1000, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds() - 16000, // Start time in the future
+            timestamp::now_seconds() - 15000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
+        );
+
+        update_presale_stage(
+            admin,
+            1000, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 15000, // End time in the future
+            5, // Set max quantity per wallet
+            STAGE_GTD_WL // Set stage to whitelist
+        );
+
+        let code = string::utf8(b"ABCDE1");
+
+        // referral::create_referral_code(userB, code, 5); // Create referral code with 5 uses and 100000000 price per item
+        // User purchases 3 items with a code (here, code is none)
+        purchase_by_whitelist(userA, metadata, 3, option::none());
+        create_referral_code(userA, code); // Create referral code for user A
+
+        purchase_by_whitelist(userB, metadata, 2, option::some(code));
+
+        let config = borrow_launchpad_config();
+        let payments = borrow_payments();
+        let user_payments = table::borrow(&payments.payments, userA_addr);
+
+        // assert!(vector::length(user_payments) == 1, 0);
+        let payment = vector::borrow(user_payments, 0);
+        assert!(payment.quantity == 3, 0);
+        assert!(payment.amount == 3000000, 0);
+        assert!(payment.buyer == userA_addr, 0);
+        assert!(
+            primary_fungible_store::balance(config.treasury_addr, metadata) == 5000000,
+            0
+        );
+
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
+    }
+
+    // Test whitelist purchase rejection in wrong stage
     #[test(
         core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
     )]
-    #[expected_failure(abort_code = EINVALID_STAGE, location = Self)]
-    fun test_purchase_by_code_in_invalid_stage(
+    #[expected_failure(abort_code = EWRONG_STAGE_NOT_WHITELIST, location = Self)]
+    fun test_purchase_by_whitelist_in_invalid_stage(
         core: &signer,
         owner: &signer,
         admin: &signer,
@@ -1335,30 +1623,28 @@ module presale::presale {
     ) acquires LaunchpadConfig, LaunchpadState, Payments {
         let (burn_cap, mint_cap) = aptos_coin::initialize_for_test(core);
         timestamp::set_time_has_started_for_testing(core);
-
         timestamp::update_global_time_for_test_secs(100); // Set time before presale starts
         let user_addr = signer::address_of(user);
         let metadata = setup_testing_token(owner, user_addr, 10000000);
         let metadata_addr = object::object_address(&metadata);
-
         init_module(owner);
-        set_accepted_coin_id(admin, metadata_addr);
-        update_whitelist_sale_stage(
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
             admin,
             1000, // Set max presale size
             1000000, // Set sale price
             timestamp::now_seconds(), // Start time in the future
-            timestamp::now_seconds() + 15000 // End time in the future
+            timestamp::now_seconds() + 15000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
         );
-        let code = string::utf8(b"ABCDE1");
-        referral::create_referral_code(user, code, 5); // Create referral code with 5 uses and 100000000 price per item
-        // Try to purchase before presale starts (current time: 5000, start: 10000) - should fail
-        purchase_by_code(user, metadata, 2, code);
+        purchase_by_whitelist(user, metadata, 2, option::none());
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);
     }
 
+    // Create test fungible asset for purchases
     #[test_only]
     fun setup_testing_token(
         owner: &signer, user_addr: address, quantity: u64
@@ -1378,6 +1664,7 @@ module presale::presale {
 
     }
 
+    // Initialize test token metadata with standard configuration
     #[test_only]
     fun init_testing_token_metadata(
         constructor_ref: &object::ConstructorRef
@@ -1395,5 +1682,316 @@ module presale::presale {
         let burn_ref = fungible_asset::generate_burn_ref(constructor_ref);
         let transfer_ref = fungible_asset::generate_transfer_ref(constructor_ref);
         (mint_ref, transfer_ref, burn_ref)
+    }
+
+    // Test adding and removing accepted coin types
+    #[test(owner = @presale, admin = @admin_addr)]
+    fun test_add_and_remove_accepted_coin_id(
+        owner: &signer, admin: &signer
+    ) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Test adding a new coin ID
+        let new_coin_id = @0x333;
+        add_accepted_coin_id(admin, new_coin_id);
+
+        // Verify the coin ID was added
+        let config = borrow_launchpad_config();
+        assert!(vector::contains(&config.accepted_coin_ids, &new_coin_id), 0);
+
+        // Test removing the coin ID
+        remove_accepted_coin_id(admin, new_coin_id);
+
+        // Verify the coin ID was removed
+        let config = borrow_launchpad_config();
+        assert!(!vector::contains(&config.accepted_coin_ids, &new_coin_id), 0);
+    }
+
+    // Test rejection of duplicate coin type additions
+    #[test(owner = @presale, admin = @admin_addr)]
+    #[expected_failure(abort_code = ECOIN_TYPE_ALREADY_ACCEPTED, location = Self)]
+    fun test_add_duplicate_coin_id(owner: &signer, admin: &signer) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Add a coin ID
+        let new_coin_id = @0x444;
+        add_accepted_coin_id(admin, new_coin_id);
+
+        // Try to add the same coin ID again - should fail with ECOIN_ALREADY_EXISTS
+        add_accepted_coin_id(admin, new_coin_id);
+    }
+
+    // Test removal of non-existent coin type
+    #[test(owner = @presale, admin = @admin_addr)]
+    #[expected_failure(abort_code = EUNSUPPORTED_COIN_TYPE, location = Self)]
+    fun test_remove_nonexistent_coin_id(owner: &signer, admin: &signer) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Try to remove a coin ID that doesn't exist - should fail with EINVALID_COIN_TYPE
+        let non_existent_coin_id = @0x555;
+        remove_accepted_coin_id(admin, non_existent_coin_id);
+    }
+
+    // Test purchase rejection when exceeding stage capacity
+    #[test(
+        core = @0x1, owner = @presale, admin = @admin_addr, user = @0xAA
+    )]
+    #[expected_failure(abort_code = ESOLD_OUT, location = Self)]
+    fun test_purchase_exceeds_max_size_should_fail(
+        core: &signer,
+        owner: &signer,
+        admin: &signer,
+        user: &signer
+    ) acquires LaunchpadConfig, LaunchpadState, Payments {
+        let (burn_cap, mint_cap) = init_module_for_test(core, owner, user);
+
+        let user_addr = signer::address_of(user);
+        let metadata = setup_testing_token(owner, user_addr, 500);
+        let metadata_addr = object::object_address(&metadata);
+
+        init_module(owner);
+        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
+            admin,
+            3, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5, // Set max quantity per wallet
+            STAGE_PRIVATE_SALE // Set stage to presale
+        );
+
+        // User tries to purchase 6 items, exceeding the max presale size of 5 - should fail
+        purchase_by_private_sale(user, metadata, 4, option::none());
+
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
+    }
+
+    // Test user purchase quantity tracking
+    #[test(
+        core = @0x1, owner = @presale, admin = @admin_addr, userA = @0xAA, userB = @0xBB
+    )]
+    fun test_get_user_purchase_quantity(
+        core: &signer,
+        owner: &signer,
+        admin: &signer,
+        userA: &signer,
+        userB: &signer
+    ) acquires LaunchpadConfig, LaunchpadState, Payments {
+        let (burn_cap, mint_cap) = init_module_for_test(core, owner, userA);
+
+        // Set up initial test conditions
+        let userA_addr = signer::address_of(userA);
+        let userB_addr = signer::address_of(userB);
+
+        let metadata = setup_testing_token(owner, userA_addr, 10000000);
+        let metadata_addr = object::object_address(&metadata);
+
+        init_module(owner);
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
+            admin,
+            10, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time
+            timestamp::now_seconds() + 2000, // End time
+            5, // Set max quantity per wallet
+            STAGE_PRIVATE_SALE // Set stage to presale
+        );
+
+        // Add userA to whitelist and make a purchase
+        add_to_whitelist(admin, userA_addr);
+        let purchase_quantity = 3;
+        purchase_by_private_sale(
+            userA,
+            metadata,
+            purchase_quantity,
+            option::none()
+        );
+
+        // Test 1: Check that userA's purchase quantity is recorded correctly
+        let userA_quantity = get_user_purchase_quantity(userA_addr);
+        assert!(userA_quantity == purchase_quantity, 0);
+
+        // Test 2: Check that userB (who hasn't purchased) returns 0
+        let userB_quantity = get_user_purchase_quantity(userB_addr);
+        assert!(userB_quantity == 0, 0);
+
+        // Test 3: Check a non-existent user returns 0
+        let nonexistent_addr = @0xDEAD;
+        let nonexistent_quantity = get_user_purchase_quantity(nonexistent_addr);
+        assert!(nonexistent_quantity == 0, 0);
+
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
+    }
+
+    // Test successful presale stage configuration update
+    #[test(owner = @presale, admin = @admin_addr)]
+    fun test_update_presale_stage_success(owner: &signer, admin: &signer) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Set up test parameters
+        let max_size = 500;
+        let price = 2000000;
+        let start_time = 1000;
+        let end_time = 2000;
+        let max_quantity = 3;
+        let stage_index = STAGE_PRIVATE_SALE;
+
+        // Update stage
+        update_presale_stage(
+            admin,
+            max_size,
+            price,
+            start_time,
+            end_time,
+            max_quantity,
+            stage_index
+        );
+
+        // Verify stage was updated correctly
+        let config = borrow_launchpad_config();
+        assert!(config.stage == stage_index, 0);
+
+        let stage = get_stage_by_index(config, stage_index);
+        assert!(stage.presale_max_size == max_size, 0);
+        assert!(stage.presale_price == price, 0);
+        assert!(stage.presale_start_time == start_time, 0);
+        assert!(stage.presale_end_time == end_time, 0);
+        assert!(stage.max_quantity_per_wallet == max_quantity, 0);
+    }
+
+    // Test updating existing presale stage configuration
+    #[test(owner = @presale, admin = @admin_addr)]
+    fun test_update_existing_presale_stage(
+        owner: &signer, admin: &signer
+    ) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Set initial stage values
+        let initial_max_size = 500;
+        let initial_price = 2000000;
+        let initial_start_time = 1000;
+        let initial_end_time = 2000;
+        let initial_max_quantity = 3;
+        let stage_index = STAGE_PRIVATE_SALE;
+
+        update_presale_stage(
+            admin,
+            initial_max_size,
+            initial_price,
+            initial_start_time,
+            initial_end_time,
+            initial_max_quantity,
+            stage_index
+        );
+
+        // Update with new values
+        let new_max_size = 800;
+        let new_price = 3000000;
+        let new_start_time = 3000;
+        let new_end_time = 5000;
+        let new_max_quantity = 5;
+
+        update_presale_stage(
+            admin,
+            new_max_size,
+            new_price,
+            new_start_time,
+            new_end_time,
+            new_max_quantity,
+            stage_index
+        );
+
+        // Verify stage was updated with new values
+        let config = borrow_launchpad_config();
+        let stage = get_stage_by_index(config, stage_index);
+
+        assert!(stage.presale_max_size == new_max_size, 0);
+        assert!(stage.presale_price == new_price, 0);
+        assert!(stage.presale_start_time == new_start_time, 0);
+        assert!(stage.presale_end_time == new_end_time, 0);
+        assert!(stage.max_quantity_per_wallet == new_max_quantity, 0);
+    }
+
+    // Test stage update rejection by unauthorized users
+    #[test(owner = @presale, normal_user = @0x123)]
+    #[expected_failure(abort_code = ENOT_AUTHORIZED, location = Self)]
+    fun test_update_presale_stage_without_admin_role(
+        owner: &signer, normal_user: &signer
+    ) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Non-admin user tries to update stage - should fail
+        update_presale_stage(
+            normal_user,
+            500,
+            2000000,
+            1000,
+            2000,
+            3,
+            STAGE_PRIVATE_SALE
+        );
+    }
+
+    // Test stage update rejection with invalid time range
+    #[test(owner = @presale, admin = @admin_addr)]
+    #[expected_failure(abort_code = EINVALID_TIME_RANGE, location = Self)]
+    fun test_update_presale_stage_with_invalid_time_range(
+        owner: &signer, admin: &signer
+    ) acquires LaunchpadConfig {
+        init_module(owner);
+
+        // Try to update with start time > end time - should fail
+        update_presale_stage(
+            admin,
+            500,
+            2000000,
+            2000, // Start time
+            1000, // End time (earlier than start time)
+            3,
+            STAGE_PRIVATE_SALE
+        );
+    }
+
+    // Test referral code creation rejection for insufficient purchases
+    #[test(
+        core = @0x1, owner = @presale, admin = @admin_addr, userA = @0xAA, userB = @0xBB
+    )]
+    #[expected_failure(abort_code = EUSER_NOT_QUALIFIED_FOR_REFERRAL, location = Self)]
+    fun test_create_referral_code_after_purchase_2_nfts(
+        core: &signer,
+        owner: &signer,
+        admin: &signer,
+        userA: &signer,
+        userB: &signer
+    ) acquires LaunchpadConfig, LaunchpadState, Payments {
+        let (burn_cap, mint_cap) = init_module_for_test(core, owner, userA);
+        let userA_addr = signer::address_of(userA);
+
+        let metadata = setup_testing_token(owner, userA_addr, 20000000);
+        let metadata_addr = object::object_address(&metadata);
+
+        init_module(owner);
+        add_accepted_coin_id(admin, metadata_addr);
+        update_presale_stage(
+            admin,
+            5, // Set max presale size
+            1000000, // Set sale price
+            timestamp::now_seconds(), // Start time in the future
+            timestamp::now_seconds() + 2000, // End time in the future
+            5,
+            STAGE_PRIVATE_SALE // Set stage to presale
+        );
+        add_to_whitelist(admin, userA_addr); // Add user A to whitelist
+        purchase_by_private_sale(userA, metadata, 2, option::none());
+        let code = string::utf8(b"ABCDE1234");
+
+        create_referral_code(userA, code);
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
     }
 }

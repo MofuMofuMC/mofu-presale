@@ -17,10 +17,11 @@ async function publish() {
 		namedAddresses: {
 			presale: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
 			treasury_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
+			admin_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
 		},
 		extraArguments: [
 			`--private-key=${process.env.MODULE_PUBLISHER_ACCOUNT_PRIVATE_KEY}`,
-			`--url=${aptosSDK.NetworkToNodeAPI[process.env.APP_NETWORK]}`,
+			`--url=${aptosSDK.NetworkToNodeAPI[process.env.APP_NETWORK]}`
 		],
 	});
 }

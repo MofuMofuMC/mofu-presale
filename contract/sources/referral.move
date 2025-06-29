@@ -4,17 +4,8 @@ module presale::referral {
     use aptos_framework::event::{Self};
     use aptos_std::table::{Self, Table};
     use aptos_std::smart_table::{Self, SmartTable};
-    use aptos_framework::aptos_account;
     use aptos_framework::timestamp;
-    use aptos_framework::object::{
-        Self,
-        ConstructorRef,
-        DeleteRef,
-        ExtendRef,
-        Object,
-        ObjectCore,
-        TransferRef
-    };
+    use aptos_framework::object::{Self, ConstructorRef, DeleteRef, ExtendRef, Object};
     use std::string;
 
     friend presale::presale;
@@ -97,7 +88,7 @@ module presale::referral {
         assert_registry_exists();
         assert_code_not_exists(code);
         let creator_addr = signer::address_of(creator);
-        assert_user_has_no_code(creator_addr, code);
+        assert_user_has_no_code(creator_addr);
 
         create_referral_code_internal(creator, code, max_invites);
         // check cannot duplcate users
@@ -153,35 +144,6 @@ module presale::referral {
     }
 
     // === Public-View Functions ===
-
-    // #[view]
-    // public fun get_referral_code(object: Object<Referral>): string::String acquires Referral {
-    //     assert_registry_exists();
-    //     let referral = borrow_referral(object);
-
-    //     referral.code
-    // }
-
-    // #[view]
-    // public fun get_max_invites(object: Object<Referral>): u64 acquires Referral {
-    //     assert_registry_exists();
-    //     let referral = borrow_referral(object);
-
-    //     referral.max_invites
-    // }
-
-    // #[view]
-    // public fun get_referrer(code: string::String): option::Option<address> acquires ReferralRegistry {
-    //     assert_registry_exists();
-    //     let key = create_referral_code_key(code);
-    //     if (table::contains(&borrow_registry().codes, key)) {
-    //         let referral_code = table::borrow(&borrow_registry().codes, key);
-    //         option::some(referral_code.creator)
-    //     } else {
-    //         option::none()
-    //     }
-    // }
-
     #[view]
     public fun is_code_available(code: string::String): bool acquires ReferralRegistry {
         if (!exists<ReferralRegistry>(@presale)) {
@@ -211,15 +173,15 @@ module presale::referral {
         }
     }
 
-    #[view]
-    public fun get_remaining_invites(code: string::String): u64 acquires ReferralRegistry {
-        assert_registry_exists();
-        let key = create_referral_code_key(code);
-        if (table::contains(&borrow_registry().codes, key)) {
-            let referral_code = table::borrow(&borrow_registry().codes, key);
-            referral_code.max_invites - referral_code.current_invites
-        } else { 0 }
-    }
+    // #[view]
+    // public fun get_remaining_invites(code: string::String): u64 acquires ReferralRegistry {
+    //     assert_registry_exists();
+    //     let key = create_referral_code_key(code);
+    //     if (table::contains(&borrow_registry().codes, key)) {
+    //         let referral_code = table::borrow(&borrow_registry().codes, key);
+    //         referral_code.max_invites - referral_code.current_invites
+    //     } else { 0 }
+    // }
 
     #[view]
     public fun get_referral_stats(code: string::String): (u64, u64, u64) acquires ReferralRegistry {
@@ -294,15 +256,12 @@ module presale::referral {
         borrow_global<ReferralRegistry>(@presale)
     }
 
-    inline fun assert_user_has_no_code(
-        user: address, code: string::String
-    ) {
+    inline fun assert_user_has_no_code(user: address) {
         let registry = borrow_registry();
         assert!(!smart_table::contains(&registry.user_to_code, user), ECODE_EXISTS);
     }
 
     inline fun assert_code_not_exists(code: string::String) {
-
         let key = create_referral_code_key(code);
         assert!(!table::contains(&borrow_registry().codes, key), ECODE_EXISTS);
     }
@@ -322,7 +281,7 @@ module presale::referral {
     use aptos_framework::aptos_coin::{AptosCoin};
 
     #[test_only]
-    use aptos_framework::account::{Self, create_account_for_test};
+    use aptos_framework::account::{create_account_for_test};
 
     #[test_only]
     public fun init_module_for_test(
@@ -340,7 +299,7 @@ module presale::referral {
     }
 
     #[test(core = @0x1, sender = @presale, user = @0xB)]
-    public fun test_create_referral_code_ok(
+    fun test_create_referral_code_ok(
         core: &signer, sender: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
@@ -368,7 +327,7 @@ module presale::referral {
 
     #[test(core = @0x1, sender = @presale, user = @0xB)]
     #[expected_failure(abort_code = ECODE_EXISTS, location = Self)]
-    public fun test_create_duplicate_referral_code(
+    fun test_create_duplicate_referral_code(
         core: &signer, sender: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
@@ -390,7 +349,7 @@ module presale::referral {
 
     #[test(core = @0x1, user = @0xB)]
     #[expected_failure(abort_code = EREGISTRY_NOT_EXISTS, location = Self)]
-    public fun test_create_referral_code_without_registry(
+    fun test_create_referral_code_without_registry(
         core: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, user, user);
@@ -406,36 +365,8 @@ module presale::referral {
         coin::destroy_mint_cap(mint_cap);
     }
 
-    // #[test(
-    //     core = @0x1, sender = @presale, userA = @0xB, userB = @0xC
-    // )]
-    // #[expected_failure(abort_code = 327683, location = aptos_framework::object)]
-    // public fun test_referral_object_cannot_transfer(
-    //     core: &signer,
-    //     sender: &signer,
-    //     userA: &signer,
-    //     userB: &signer
-    // ) acquires ReferralRegistry {
-    //     let (burn_cap, mint_cap) = init_module_for_test(core, sender, userA);
-
-    //     init_referral_registry(sender);
-
-    //     let code = string::utf8(b"NOTRANSFER");
-    //     let max_invites = 3;
-    //     let (referral_signer, constructor_ref) =
-    //         create_referral_code(userA, code, max_invites);
-
-    //     // let obj_addr = signer::address_of(&referral_signer);
-    //     // let object = object::object_from_constructor_ref<ObjectCore>(&constructor_ref);
-
-    //     // object::transfer(userA, object, signer::address_of(userB));
-
-    //     coin::destroy_burn_cap(burn_cap);
-    //     coin::destroy_mint_cap(mint_cap);
-    // }
-
     #[test(core = @0x1, sender = @presale, user = @0xB)]
-    public fun test_increase_current_invites_success(
+    fun test_increase_current_invites_success(
         core: &signer, sender: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
@@ -466,7 +397,7 @@ module presale::referral {
 
     #[test(core = @0x1, sender = @presale, user = @0xB)]
     #[expected_failure(abort_code = EMAX_INVITES_REACHED, location = Self)]
-    public fun test_increase_current_invites_over_max_invites(
+    fun test_increase_current_invites_over_max_invites(
         core: &signer, sender: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
@@ -489,7 +420,7 @@ module presale::referral {
     }
 
     #[test(core = @0x1, sender = @presale, user = @0xB)]
-    public fun test_get_referral_stats_ok(
+    fun test_get_referral_stats_ok(
         core: &signer, sender: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
@@ -522,7 +453,7 @@ module presale::referral {
     }
 
     #[test(core = @0x1, sender = @presale, user = @0xB)]
-    public fun test_get_referral_stats_nonexistent_code(
+    fun test_get_referral_stats_nonexistent_code(
         core: &signer, sender: &signer, user: &signer
     ) acquires ReferralRegistry {
         let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
@@ -536,6 +467,26 @@ module presale::referral {
         assert!(max == 0, 0);
         assert!(current == 0, 1);
         assert!(sales == 0, 2);
+
+        coin::destroy_burn_cap(burn_cap);
+        coin::destroy_mint_cap(mint_cap);
+    }
+
+    #[test(core = @0x1, sender = @presale, user = @0xB)]
+    fun test_invites_over_size(
+        core: &signer, sender: &signer, user: &signer
+    ) acquires ReferralRegistry {
+        let (burn_cap, mint_cap) = init_module_for_test(core, sender, user);
+
+        init_referral_registry(sender);
+
+        let code = string::utf8(b"BURN");
+        let max_invites = 32;
+        create_referral_code(user, code, max_invites);
+
+        increase_current_invites(signer::address_of(user), code, 5);
+        increase_current_invites(signer::address_of(user), code, 3);
+        increase_current_invites(signer::address_of(user), code, 3);
 
         coin::destroy_burn_cap(burn_cap);
         coin::destroy_mint_cap(mint_cap);

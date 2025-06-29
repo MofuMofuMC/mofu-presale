@@ -15,6 +15,7 @@ async function compile() {
 		namedAddresses: {
 			presale: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
 			treasury_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
+			admin_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
 		},
 	});
 }

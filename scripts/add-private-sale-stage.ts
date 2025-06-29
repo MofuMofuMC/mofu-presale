@@ -33,13 +33,15 @@ async function main() {
   const txn = await aptos.transaction.build.simple({
     sender: account.accountAddress,
     data: {
-      function: `${PRESALE_CONTRACT_ADDRESS}::presale::update_whitelist_sale_stage`,
+      function: `${PRESALE_CONTRACT_ADDRESS}::presale::update_presale_stage`,
       typeArguments: [],
       functionArguments: [
-        new U64(500),
+        new U64(30),
         new U64(1000000),
-        new U64(Number(nowSeconds)),
+        new U64(Number(nowSeconds) ),
         new U64(Number(nowSeconds) + 3600 * 24 * 2),
+        new U64(5),
+        new U64(1),
       ],
     },
   });
