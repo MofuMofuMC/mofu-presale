@@ -1,5 +1,4 @@
 module presale::whitelist {
-    // use aptos_framework::timestamp;
     use std::signer;
     use aptos_framework::event::{Self};
     use aptos_std::table::{Self, Table};

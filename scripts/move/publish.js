@@ -30,6 +30,7 @@ async function publish() {
 			extraArguments: [
 				`--private-key=${process.env.MODULE_PUBLISHER_ACCOUNT_PRIVATE_KEY}`,
 				`--url=${aptosSDK.NetworkToNodeAPI[process.env.APP_NETWORK]}`,
+				"--included-artifacts=none"
 			],
 		})
 		.then((response) => {

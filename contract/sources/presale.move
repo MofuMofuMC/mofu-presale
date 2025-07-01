@@ -112,9 +112,9 @@ module presale::presale {
         };
 
         // Add default accepted coin
-        vector::push_back(
-            &mut launchpad_config.accepted_coin_ids, ACCEPTED_COIN_METADATA_ID
-        );
+        // vector::push_back(
+        //     &mut launchpad_config.accepted_coin_ids, ACCEPTED_COIN_METADATA_ID
+        // );
 
         let presale_config = PresaleStage {
             presale_max_size: DEFAULT_MAX_PRESALE_SIZE,
@@ -409,6 +409,9 @@ module presale::presale {
                 signer::address_of(sender), code, quantity
             );
         };
+
+        whitelist::decrease_whitelist_mint_amount(sender, quantity);
+        
 
         // Presale sold out
         let total_price = purchase_internal_with_asset(sender, metadata, quantity, code);

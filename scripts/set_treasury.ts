@@ -4,7 +4,6 @@ import {
 	AptosConfig,
 	type ClientConfig,
 	Hex,
-	MoveString,
 	Network,
 	U256,
 } from "@aptos-labs/ts-sdk";
@@ -17,7 +16,7 @@ async function main() {
 	// };
 
 	const config = new AptosConfig({
-		network: Network.TESTNET,
+		network: Network.MAINNET,
 		// clientConfig,
 	});
 
@@ -25,14 +24,17 @@ async function main() {
 
 	const account = getAccount();
 
+	// 0xc5a5732db6cbb0407852fe98a515b1c83922091bc6bf21803d91eeb196f08f9d
+	// 0x8919974883ea656fa4ba059819573b55b55b09850cb723aba96b76c468d09645
 	const txn = await aptos.transaction.build.simple({
 		sender: account.accountAddress,
 		data: {
 			function:
-				`${PRESALE_CONTRACT_ADDRESS}::presale::set_accepted_coin_type`,
+				`${PRESALE_CONTRACT_ADDRESS}::presale::set_treasury`,
 			typeArguments: [],
 			functionArguments: [
-				new MoveString("0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832"),
+				AccountAddress.from("0xe6748bfab80a3655ac851b705644d19338739b08ae232f58bd08ba166f76d20f")
+				// AccountAddress.from("0x30ff8dca978a711b19730eb767a79377023390899e5c3b07c7e6e245a4998874")
 			],
 		},
 	});

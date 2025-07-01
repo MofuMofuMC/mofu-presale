@@ -15,9 +15,9 @@ async function publish() {
 		packageDirectoryPath: "contract",
 		objectAddress: process.env.MODULE_ADDRESS,
 		namedAddresses: {
-			presale: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
-			treasury_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
-			admin_addr: process.env.MODULE_PUBLISHER_ACCOUNT_ADDRESS,
+			presale: process.env.MODULE_ADDRESS,
+			treasury_addr: process.env.MODULE_ADDRESS,
+			admin_addr: process.env.MODULE_ADDRESS,
 		},
 		extraArguments: [
 			`--private-key=${process.env.MODULE_PUBLISHER_ACCOUNT_PRIVATE_KEY}`,
