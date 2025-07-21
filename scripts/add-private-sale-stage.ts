@@ -11,7 +11,7 @@ import {
 } from "@aptos-labs/ts-sdk";
 import { getAccount } from "./config";
 
-const PRESALE_CONTRACT_ADDRESS = process.env.MODULE_ADDRESS
+const PRESALE_CONTRACT_ADDRESS = process.env.MODULE_ADDRESS;
 async function main() {
   const config = new AptosConfig({
     network: Network.TESTNET,
@@ -26,9 +26,10 @@ async function main() {
     function: "0x1::timestamp::now_seconds",
   };
 
-  const nowSeconds = (await aptos.view({ payload }))[0];
+  const nextSeconds = (await aptos.view({ payload }))[0];
 
-  console.log(`Now Seconds: ${nowSeconds}`);
+  // const nowSeconds = 1751205600;
+  console.log(`Now Seconds: ${nextSeconds}`);
 
   const txn = await aptos.transaction.build.simple({
     sender: account.accountAddress,
@@ -36,10 +37,10 @@ async function main() {
       function: `${PRESALE_CONTRACT_ADDRESS}::presale::update_presale_stage`,
       typeArguments: [],
       functionArguments: [
-        new U64(30),
-        new U64(1000000),
-        new U64(Number(nowSeconds) ),
-        new U64(Number(nowSeconds) + 3600 * 24 * 2),
+        new U64(1500),
+        new U64(1 * 1000000),
+        new U64(Number(nextSeconds)),
+        new U64(Number(nextSeconds) + 60 * 60 * 24 * 7), // 7 days later
         new U64(5),
         new U64(1),
       ],

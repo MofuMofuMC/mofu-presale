@@ -4,6 +4,7 @@ import {
 	AptosConfig,
 	type ClientConfig,
 	Hex,
+	MoveString,
 	Network,
 	U256,
 } from "@aptos-labs/ts-sdk";
@@ -24,17 +25,14 @@ async function main() {
 
 	const account = getAccount();
 
-	// 0xc5a5732db6cbb0407852fe98a515b1c83922091bc6bf21803d91eeb196f08f9d
-	// 0x8919974883ea656fa4ba059819573b55b55b09850cb723aba96b76c468d09645
 	const txn = await aptos.transaction.build.simple({
 		sender: account.accountAddress,
 		data: {
 			function:
-				`${PRESALE_CONTRACT_ADDRESS}::presale::add_to_whitelist`,
+				`${PRESALE_CONTRACT_ADDRESS}::presale::add_accepted_coin_id`,
 			typeArguments: [],
 			functionArguments: [
-				AccountAddress.from("0x131c061aa9f2523e743765ce278f83fd189ead4678f1583368fc886c08999b86")
-				// AccountAddress.from("0x30ff8dca978a711b19730eb767a79377023390899e5c3b07c7e6e245a4998874")
+				AccountAddress.from("0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832"),
 			],
 		},
 	});

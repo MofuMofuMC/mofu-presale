@@ -8,22 +8,23 @@ import {
 } from "@aptos-labs/ts-sdk";
 import { getAccount } from "./config";
 
+import tokens from './token_ids.json'
+
 const PRESALE_CONTRACT_ADDRESS = process.env.MODULE_ADDRESS;
 
 async function main() {
   const config = new AptosConfig({
-    network: Network.TESTNET,
+    network: Network.MAINNET,
+    clientConfig: {
+      API_KEY: "AG-5CL4LOBS2JK65GHXFNEKKGI33D128FJ3W",
+    },
   });
 
   const aptos = new Aptos(config);
   const account = getAccount();
 
   // List of addresses to add to whitelist
-  const addressesToWhitelist = [
-    "0x131c061aa9f2523e743765ce278f83fd189ead4678f1583368fc886c08999b86",
-"0x731e36c20fa090d98c5826cb0a99684158dd3c80b02aa8b60bd18e9cbb6e92d0"
-    // Add more addresses here
-  ];
+  const addressesToWhitelist = tokens
 
   console.log(
     `Adding ${addressesToWhitelist.length} addresses to whitelist...`
@@ -39,7 +40,7 @@ async function main() {
       );
 
       return {
-        function: `${PRESALE_CONTRACT_ADDRESS}::presale::add_to_whitelist`,
+        function: `${PRESALE_CONTRACT_ADDRESS}::presale::add_to_nft_whitelist`,
         typeArguments: [],
         functionArguments: [AccountAddress.from(address)],
       };
