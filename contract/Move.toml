@@ -23,5 +23,3 @@ subdir = "aptos-framework"
 git = "https://github.com/aptos-labs/aptos-framework.git"
 rev = "mainnet"
 subdir = "aptos-token-objects"
-
-[dev-dependencies]

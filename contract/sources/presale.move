@@ -65,6 +65,10 @@ module presale::presale {
         code: option::Option<string::String>
     }
 
+    // struct Stages has key {
+    //     stages: Table<u64, address>
+    // }
+
     // === Errors ===
     const ESOLD_OUT: u64 = 1; // Presale is sold out
     const ENOT_AUTHORIZED: u64 = 2; // User is not authorized for this operation
@@ -226,12 +230,55 @@ module presale::presale {
     }
 
     // Adds a user to the whitelist with a maximum quantity per purchase.
-    public entry fun add_to_whitelist(admin: &signer, user_addr: address) acquires LaunchpadConfig {
+    public entry fun add_to_whitelist(admin: &signer, user_addr: address) {
+        abort 0
+        // assert_launchpad_config_exists();
+        // let admin_addr = signer::address_of(admin);
+        // let config = borrow_launchpad_config_mut();
+        // assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
+        // whitelist::add_to_whitelist(user_addr, 1);
+    }
+
+    public entry fun add_to_whitelist_v2(
+        admin: &signer, user_addr: address, stage: u64
+    ) acquires LaunchpadConfig {
         assert_launchpad_config_exists();
         let admin_addr = signer::address_of(admin);
         let config = borrow_launchpad_config_mut();
         assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
-        whitelist::add_to_whitelist(user_addr, MAX_QUANTITY_PER_PURCHASE);
+        whitelist::add_to_whitelist(user_addr, stage);
+    }
+
+    public entry fun remove_addresses_from_whitelist(
+        admin: &signer, wl_addresses: vector<address>
+    ) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+        let admin_addr = signer::address_of(admin);
+        let config = borrow_launchpad_config_mut();
+        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
+
+        vector::for_each(
+            wl_addresses,
+            |user_addr| {
+                whitelist::remove_from_whitelist_v2(user_addr);
+            }
+        );
+    }
+
+    public entry fun add_addresses_to_whitelist(
+        admin: &signer, wl_addresses: vector<address>, stage: u64
+    ) acquires LaunchpadConfig {
+        assert_launchpad_config_exists();
+        let admin_addr = signer::address_of(admin);
+        let config = borrow_launchpad_config_mut();
+        assert!(is_admin(config, admin_addr), ENOT_AUTHORIZED);
+
+        vector::for_each(
+            wl_addresses,
+            |user_addr| {
+                whitelist::add_to_whitelist_v2(user_addr, stage);
+            }
+        );
     }
 
     // Add NFT to whitelist for genesis holders
@@ -386,9 +433,9 @@ module presale::presale {
         assert_not_sold_out(launchpad_config);
         assert_has_not_purchased(signer::address_of(sender));
 
+        let stage = launchpad_config.stage;
         assert!(
-            launchpad_config.stage >= STAGE_GTD_WL
-                && launchpad_config.stage <= STAGE_FCFS_WL,
+            stage >= STAGE_GTD_WL && stage <= STAGE_FCFS_WL,
             EWRONG_STAGE_NOT_WHITELIST
         );
         let presale_stage = get_stage_by_index(launchpad_config, launchpad_config.stage);
@@ -402,6 +449,8 @@ module presale::presale {
             ESOLD_OUT
         );
 
+        whitelist::assert_user_eligible_for_whitelist(sender, stage);
+
         if (option::is_some(&code)) {
             let code = option::extract(&mut code);
             referral::assert_referral_code_available(code);
@@ -409,9 +458,6 @@ module presale::presale {
                 signer::address_of(sender), code, quantity
             );
         };
-
-        whitelist::decrease_whitelist_mint_amount(sender, quantity);
-        
 
         // Presale sold out
         let total_price = purchase_internal_with_asset(sender, metadata, quantity, code);
@@ -448,7 +494,7 @@ module presale::presale {
         //     launchpad_config.stage == STAGE_PRIVATE_SALE,
         //     EWRONG_STAGE_NOT_PRESALE
         // );
-
+        let stage = launchpad_config.stage;
         let launchpad_state = borrow_state();
         // Check if presale is sold out
         assert!(
@@ -465,7 +511,7 @@ module presale::presale {
             let sender_addr = signer::address_of(sender);
             whitelist_nft::mark_nft_as_used(sender_addr, genesis);
         } else {
-            whitelist::decrease_whitelist_mint_amount(sender, quantity);
+            whitelist::assert_user_eligible_for_whitelist(sender, stage);
         };
 
         // Emit event
@@ -926,7 +972,10 @@ module presale::presale {
             STAGE_PRIVATE_SALE // Set stage to presale
         );
 
-        add_to_whitelist(admin, userA_addr); // Add user A to whitelist
+        add_to_whitelist_v2(admin, userA_addr, STAGE_PRIVATE_SALE); // Add user A to whitelist
+        add_to_whitelist_v2(admin, userB_addr, STAGE_GTD_WL); // Add user B to whitelist
+        add_to_whitelist_v2(admin, userC_addr, STAGE_GTD_WL); // Add user C to whitelist
+        add_to_whitelist_v2(admin, userD_addr, STAGE_FCFS_WL); // Add user D to whitelist
         add_to_nft_whitelist(admin, token_addr); // Add NFT to whitelist
 
         // user a
@@ -1037,7 +1086,7 @@ module presale::presale {
             STAGE_PRIVATE_SALE // Set stage to presale
         );
 
-        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, user_addr, 1); // Add user to whitelist
         let owner_addr = signer::address_of(owner);
         // User purchases 3 items
         purchase_by_private_sale(user, metadata, 3, option::none());
@@ -1059,7 +1108,7 @@ module presale::presale {
             2
         );
         assert!(
-            whitelist::is_user_eligible_for_whitelist_mint(user_addr) == 2,
+            whitelist::get_user_whitelist_stage(user_addr) == 1,
             0
         );
 
@@ -1122,7 +1171,7 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, user_addr, 1); // Add user to whitelist
         add_accepted_coin_id(admin, metadata_addr);
         update_presale_stage(
             admin,
@@ -1159,7 +1208,7 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, user_addr, 1); // Add user to whitelist
         add_accepted_coin_id(admin, metadata_addr);
         update_presale_stage(
             admin,
@@ -1195,7 +1244,7 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, user_addr, 1); // Add user to whitelist
         add_accepted_coin_id(admin, metadata_addr);
         update_presale_stage(
             admin,
@@ -1472,7 +1521,7 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        add_to_whitelist(admin, userA_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, userA_addr, 1); // Add user to whitelist
 
         add_accepted_coin_id(admin, metadata_addr);
         update_presale_stage(
@@ -1563,7 +1612,8 @@ module presale::presale {
         );
 
         init_module(owner);
-        add_to_whitelist(admin, userA_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, userA_addr, 2); // Add user to whitelist
+        add_to_whitelist_v2(admin, userB_addr, 2); // Add user to whitelist
 
         add_accepted_coin_id(admin, metadata_addr);
         update_presale_stage(
@@ -1753,7 +1803,7 @@ module presale::presale {
         let metadata_addr = object::object_address(&metadata);
 
         init_module(owner);
-        add_to_whitelist(admin, user_addr); // Add user to whitelist
+        add_to_whitelist_v2(admin, user_addr, 1); // Add user to whitelist
         add_accepted_coin_id(admin, metadata_addr);
         update_presale_stage(
             admin,
@@ -1805,7 +1855,7 @@ module presale::presale {
         );
 
         // Add userA to whitelist and make a purchase
-        add_to_whitelist(admin, userA_addr);
+        add_to_whitelist_v2(admin, userA_addr, 1);
         let purchase_quantity = 3;
         purchase_by_private_sale(
             userA,
@@ -1989,7 +2039,7 @@ module presale::presale {
             5,
             STAGE_PRIVATE_SALE // Set stage to presale
         );
-        add_to_whitelist(admin, userA_addr); // Add user A to whitelist
+        add_to_whitelist_v2(admin, userA_addr, STAGE_PRIVATE_SALE); // Add user A to whitelist
         purchase_by_private_sale(userA, metadata, 2, option::none());
         let code = string::utf8(b"ABCDE1234");
 

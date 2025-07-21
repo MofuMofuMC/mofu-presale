@@ -1,6 +1,5 @@
 module presale::whitelist {
     use std::signer;
-    use aptos_framework::event::{Self};
     use aptos_std::table::{Self, Table};
 
     friend presale::presale;
@@ -47,10 +46,6 @@ module presale::whitelist {
     struct WhitelistConfig has key {
         // Mapping of whitelisted addresses to their allowed quantities
         whitelisted_address: Table<address, u64>
-        // // Start time for whitelist minting period
-        // whitelist_presale_start_time: u64,
-        // // End time for whitelist minting period
-        // whitelist_presale_end_time: u64
     }
 
     // === Public Functions ===
@@ -78,33 +73,62 @@ module presale::whitelist {
         assert!(is_whitelisted == true, EWHITELIST_NOT_EXISTS);
 
         table::remove(&mut config.whitelisted_address, user_addr);
-        event::emit(WhitelistRemovedEvent { user_addr });
     }
 
-    // Update the whitelist minting time period
-    // Sets the start and end times for when whitelisted users can mint
-    // public(friend) fun update_whitelist_presale_times(
-    //     whitelist_presale_start_time: u64, whitelist_presale_end_time: u64
-    // ) acquires WhitelistConfig {
-    //     assert_whitelist_config_exists();
+    public(friend) fun remove_from_whitelist_v2(user_addr: address) acquires WhitelistConfig {
+        assert_whitelist_config_exists();
 
-    //     let config = borrow_whitelist_config_mut();
-    //     config.whitelist_presale_start_time = whitelist_presale_start_time;
-    //     config.whitelist_presale_end_time = whitelist_presale_end_time;
-    // }
+        let config = borrow_whitelist_config_mut();
+        let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
+        if (is_whitelisted == false) { return };
+
+        table::remove(&mut config.whitelisted_address, user_addr);
+    }
 
     // Add a user to the whitelist with specified quantity
     // Can only be called by friend modules (presale module)
     public(friend) fun add_to_whitelist(user_addr: address, amount: u64) acquires WhitelistConfig {
-        assert!(amount > 0, EAMOUNT_MUST_BE_GREATER_THAN_ZERO);
+        // assert!(amount > 0, EAMOUNT_MUST_BE_GREATER_THAN_ZERO);
         assert_whitelist_config_exists();
+        let config = borrow_whitelist_config();
+        let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
+        assert!(is_whitelisted == false, EWHITELIST_ALREADY_EXISTS);
+
         add_whitelist_internal(user_addr, amount);
+    }
+
+    public(friend) fun add_to_whitelist_v2(user_addr: address, stage: u64) acquires WhitelistConfig {
+        assert_whitelist_config_exists();
+        let config = borrow_whitelist_config();
+        let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
+
+        if (!is_whitelisted) {
+            add_whitelist_internal(user_addr, stage);
+        }
     }
 
     // Decrease the whitelist allocation for a user by the given mint (sale) amount.
     // Called when a user makes a whitelist mint/purchase.
     public(friend) fun decrease_whitelist_mint_amount(
         sender: &signer, quantity: u64
+    ) {
+        abort 0
+        // assert_whitelist_config_exists();
+
+        // let config = borrow_whitelist_config_mut();
+        // let user_addr = signer::address_of(sender);
+        // let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
+        // assert!(is_whitelisted == true, EWHITELIST_NOT_EXISTS);
+
+        // let current_quantity =
+        //     table::borrow_mut(&mut config.whitelisted_address, user_addr);
+        // assert!(*current_quantity >= quantity, EINSUFFICIENT_QUANTITY);
+
+        // *current_quantity = *current_quantity - quantity;
+    }
+
+    public(friend) fun assert_user_eligible_for_whitelist(
+        sender: &signer, stage: u64
     ) acquires WhitelistConfig {
         assert_whitelist_config_exists();
 
@@ -112,12 +136,8 @@ module presale::whitelist {
         let user_addr = signer::address_of(sender);
         let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
         assert!(is_whitelisted == true, EWHITELIST_NOT_EXISTS);
-
-        let current_quantity =
-            table::borrow_mut(&mut config.whitelisted_address, user_addr);
-        assert!(*current_quantity >= quantity, EINSUFFICIENT_QUANTITY);
-
-        *current_quantity = *current_quantity - quantity;
+        let user_stage = table::borrow(&mut config.whitelisted_address, user_addr);
+        assert!(*user_stage == stage, EWHITELIST_NOT_EXISTS);
     }
 
     // public(friend) fun assert_within_whitelist_presale_period() acquires WhitelistConfig {
@@ -139,12 +159,9 @@ module presale::whitelist {
     // Ensures no duplicate entries and emits appropriate events
     fun add_whitelist_internal(user_addr: address, amount: u64) acquires WhitelistConfig {
         let config = borrow_whitelist_config_mut();
-        let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
-
-        assert!(is_whitelisted == false, EWHITELIST_ALREADY_EXISTS);
 
         table::add(&mut config.whitelisted_address, user_addr, amount);
-        event::emit(WhitelistAddedEvent { user_addr });
+        // event::emit(WhitelistAddedEvent { user_addr });
     }
 
     // === Public-View Functions ===
@@ -160,6 +177,17 @@ module presale::whitelist {
     #[view]
     public fun whitelist_config_exists(module_address: address): bool {
         exists<WhitelistConfig>(module_address)
+    }
+
+    #[view]
+    public fun get_user_whitelist_stage(user_addr: address): u64 acquires WhitelistConfig {
+        let config = borrow_whitelist_config();
+        let is_whitelisted = table::contains(&config.whitelisted_address, user_addr);
+        if (is_whitelisted) {
+            let stage = table::borrow(&config.whitelisted_address, user_addr);
+            return *stage
+        };
+        0
     }
 
     // Get the eligible minting quantity for a user during whitelist period (0 if not whitelisted or outside time period)
@@ -216,17 +244,17 @@ module presale::whitelist {
         assert!(!has_whitelist(signer::address_of(user)), 0);
     }
 
-    #[test(sender = @presale, user = @0xA)]
-    #[expected_failure(
-        abort_code = EWHITELIST_ALREADY_EXISTS, location = presale::whitelist
-    )]
-    fun test_add_duplicate_whitelist(sender: &signer, user: &signer) acquires WhitelistConfig {
-        init_whitelist_config(sender);
-        add_whitelist_internal(signer::address_of(user), 5);
-        assert!(has_whitelist(signer::address_of(user)), 0);
+    // #[test(sender = @presale, user = @0xA)]
+    // #[expected_failure(
+    //     abort_code = EWHITELIST_ALREADY_EXISTS, location = presale::whitelist
+    // )]
+    // fun test_add_duplicate_whitelist(sender: &signer, user: &signer) acquires WhitelistConfig {
+    //     init_whitelist_config(sender);
+    //     add_whitelist_internal(signer::address_of(user), 5);
+    //     assert!(has_whitelist(signer::address_of(user)), 0);
 
-        add_whitelist_internal(signer::address_of(user), 5);
-    }
+    //     add_whitelist_internal(signer::address_of(user), 5);
+    // }
 
     #[test(sender = @presale, user = @0xA)]
     #[expected_failure(abort_code = EWHITELIST_NOT_EXISTS, location = presale::whitelist)]
@@ -301,30 +329,13 @@ module presale::whitelist {
         let user_addr = signer::address_of(user);
 
         // Add user to whitelist with default quantity 5
-        add_whitelist_internal(user_addr, 5);
-
-        let config = borrow_whitelist_config();
-        let initial_quantity = table::borrow(&config.whitelisted_address, user_addr);
-        assert!(*initial_quantity == 5, 0);
-
-        // Deduct 2 from quantity
-        decrease_whitelist_mint_amount(user, 2);
-
-        let config = borrow_whitelist_config();
-        let remaining_quantity = table::borrow(&config.whitelisted_address, user_addr);
-        assert!(*remaining_quantity == 3, 0);
-
-        // Deduct remaining 3
-        decrease_whitelist_mint_amount(user, 3);
-
-        let config = borrow_whitelist_config();
-        let final_quantity = table::borrow(&config.whitelisted_address, user_addr);
-        assert!(*final_quantity == 0, 0);
+        add_whitelist_internal(user_addr, 1); // Deduct 2 from quantity
+        assert_user_eligible_for_whitelist(user, 1);
     }
 
     #[test(sender = @presale, user = @0xA)]
-    #[expected_failure(abort_code = EINSUFFICIENT_QUANTITY, location = presale::whitelist)]
-    fun test_decrease_whitelist_mint_amount_insufficient(
+    #[expected_failure(abort_code = EWHITELIST_NOT_EXISTS, location = presale::whitelist)]
+    fun test_decrease_whitelist_mint_amount_in_invalid_stage(
         sender: &signer, user: &signer
     ) acquires WhitelistConfig {
         init_whitelist_config(sender);
@@ -333,17 +344,17 @@ module presale::whitelist {
         // Add user to whitelist with default quantity 5
         add_whitelist_internal(user_addr, 5);
 
-        decrease_whitelist_mint_amount(user, 6);
+        assert_user_eligible_for_whitelist(user, 6);
     }
 
-    #[test(sender = @presale, user = @0xA)]
-    #[expected_failure(abort_code = EWHITELIST_NOT_EXISTS, location = presale::whitelist)]
-    fun test_decrease_whitelist_mint_amount_not_whitelisted(
-        sender: &signer, user: &signer
-    ) acquires WhitelistConfig {
-        init_whitelist_config(sender);
-        decrease_whitelist_mint_amount(user, 1);
-    }
+    // #[test(sender = @presale, user = @0xA)]
+    // #[expected_failure(abort_code = EWHITELIST_NOT_EXISTS, location = presale::whitelist)]
+    // fun test_decrease_whitelist_mint_amount_not_whitelisted(
+    //     sender: &signer, user: &signer
+    // ) acquires WhitelistConfig {
+    //     init_whitelist_config(sender);
+    //     decrease_whitelist_mint_amount(user, 1);
+    // }
 
     // #[test(framework = @0x1, sender = @presale)]
     // public fun test_assert_within_whitelist_presale_period_ok(
@@ -379,4 +390,74 @@ module presale::whitelist {
     //     // Should abort
     //     assert_within_whitelist_presale_period();
     // }
+
+    #[test(
+        sender = @presale, user1 = @0xA, user2 = @0xB, user3 = @0xC
+    )]
+    fun test_get_user_whitelist_stage_ok(
+        sender: &signer,
+        user1: &signer,
+        user2: &signer,
+        user3: &signer
+    ) acquires WhitelistConfig {
+        init_whitelist_config(sender);
+
+        let user1_addr = signer::address_of(user1);
+        let user2_addr = signer::address_of(user2);
+        let user3_addr = signer::address_of(user3);
+
+        // Add users to different whitelist stages
+        add_whitelist_internal(user1_addr, 1); // Stage 1
+        add_whitelist_internal(user2_addr, 2); // Stage 2
+        add_whitelist_internal(user3_addr, 5); // Stage 5
+
+        // Test getting whitelist stages for whitelisted users
+        let user1_stage = get_user_whitelist_stage(user1_addr);
+        let user2_stage = get_user_whitelist_stage(user2_addr);
+        let user3_stage = get_user_whitelist_stage(user3_addr);
+
+        assert!(user1_stage == 1, 0);
+        assert!(user2_stage == 2, 0);
+        assert!(user3_stage == 5, 0);
+    }
+
+    #[test(sender = @presale, user = @0xA)]
+    fun test_get_user_whitelist_stage_non_whitelisted_user(
+        sender: &signer, user: &signer
+    ) acquires WhitelistConfig {
+        init_whitelist_config(sender);
+
+        let user_addr = signer::address_of(user);
+
+        // Test getting whitelist stage for non-whitelisted user
+        let user_stage = get_user_whitelist_stage(user_addr);
+
+        // Should return 0 for non-whitelisted user
+        assert!(user_stage == 0, 0);
+    }
+
+    #[test(sender = @presale, user = @0xA)]
+    fun test_get_user_whitelist_stage_after_removal(
+        sender: &signer, user: &signer
+    ) acquires WhitelistConfig {
+        init_whitelist_config(sender);
+
+        let user_addr = signer::address_of(user);
+
+        // Add user to whitelist stage 3
+        add_whitelist_internal(user_addr, 3);
+
+        // Verify user is in stage 3
+        let user_stage_before = get_user_whitelist_stage(user_addr);
+        assert!(user_stage_before == 3, 0);
+
+        // Remove user from whitelist
+        remove_from_whitelist(user_addr);
+
+        // Test getting whitelist stage after removal
+        let user_stage_after = get_user_whitelist_stage(user_addr);
+
+        // Should return 0 after removal
+        assert!(user_stage_after == 0, 0);
+    }
 }
